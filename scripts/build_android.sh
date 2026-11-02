@@ -4,6 +4,42 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-debug}"
+
+# O Gradle pode escolher um JRE sem javac (por exemplo, java-25-openjdk).
+# Preferimos um JAVA_HOME válido ou um JDK local com compilador.
+choose_java_home() {
+  if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/javac" ]; then
+    return 0
+  fi
+  local candidate
+  for candidate in \
+    "$HOME/.local/jdks"/jdk-21* \
+    "$HOME/.local/jdks"/jdk-17* \
+    "$HOME/.local"/jdk-21* \
+    "$HOME/.local"/jdk-17* \
+    /usr/lib/jvm/java-21-openjdk* \
+    /usr/lib/jvm/java-17-openjdk*; do
+    if [ -x "$candidate/bin/javac" ]; then
+      export JAVA_HOME="$candidate"
+      return 0
+    fi
+  done
+  echo "ERRO: nenhum JDK com javac encontrado." >&2
+  echo "Instale um JDK 17+ ou defina JAVA_HOME para um JDK válido." >&2
+  exit 1
+}
+
+choose_java_home
+echo "[build] JAVA_HOME=$JAVA_HOME"
+
+if [ -z "${ANDROID_HOME:-}" ] && [ -d "$HOME/Android/Sdk" ]; then
+  export ANDROID_HOME="$HOME/Android/Sdk"
+fi
+if [ -n "${ANDROID_HOME:-}" ]; then
+  export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+  echo "[build] ANDROID_HOME=$ANDROID_HOME"
+fi
+
 cd "$ROOT/android-app"
 
 case "$MODE" in

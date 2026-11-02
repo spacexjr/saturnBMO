@@ -80,7 +80,7 @@ fun MainScreen(
             .fillMaxSize()
             .background(BmoGreen),
     ) {
-        BmoFace(ui.faceState, Modifier.fillMaxSize(), fullBleed = true)
+        BmoFace(ui, Modifier.fillMaxSize(), fullBleed = true)
 
         // Camada de gestos fica abaixo dos controles: toque alterna a barra,
         // toque longo abre os ajustes sem precisar de botão sempre visível.
