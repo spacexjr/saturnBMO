@@ -60,10 +60,16 @@
   },
   "wakeword": {
     "enabled": true,
-    "mode": "transcript",
-    "phrases": ["ei bmo", "ei bemo", "hey bmo", "oi bmo", "e bmo", "bmo"],
-    "acoustic_model": null,
-    "note": "A palavra de ativação é validada pela transcrição (STT). O wakeword.onnx original do projeto be-more-agent é 'Hey Jarvis' e não reconhece 'Ei, BMO'; ele não é usado como detector principal."
+    "mode": "hybrid",
+    "phrases": ["ei bmo", "ei beemo", "hey bmo", "hey beemo", "be eme o", "bê ême ó", "ei be eme o", "beemo", "bi mo", "bmo"],
+    "acoustic_model": "../assets/wakeword/saturnbmo.onnx",
+    "mel_model": "../assets/wakeword/melspectrogram.onnx",
+    "embedding_model": "../assets/wakeword/embedding_model.onnx",
+    "threshold": 0.75,
+    "cooldown_s": 2.0,
+    "hop_ms": 100,
+    "min_consecutive": 1,
+    "note": "Detector acústico ONNX local (saturnbmo.onnx) com fallback para validação por transcrição quando os arquivos não existem."
   },
   "security": {
     "allowed_commands": ["get_time", "get_date"],

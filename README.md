@@ -14,6 +14,7 @@ O celular Android é a interface: mostra apenas o rosto do BMO em paisagem, capt
 - Microfone PCM 16 kHz mono, em blocos de 20 ms.
 - Reprodução de voz em streaming no alto-falante.
 - Detecção de fala por energia (VAD) no PC.
+- Palavra de ativação acústica local (`saturnbmo.onnx`) com fallback por transcrição.
 - Transcrição local com whisper.cpp.
 - Respostas locais de hora/data sem passar pelo LLM.
 - Clima e previsão de chuva pela internet, usando o GPS do celular para localizar você.
@@ -147,11 +148,48 @@ O `adb reverse` é só para desenvolvimento; não substitui a conexão Wi-Fi rea
 
 ### Palavra de ativação
 
-A palavra de ativação é **baseada na transcrição**. O áudio é transcrito pelo Whisper.cpp e o texto normalizado é comparado com `ei bmo`, `ei bemo`, `hey bmo`, `oi bmo`, `e bmo` e `bmo`.
+O backend tem um detector acústico local treinado para o saturnBMO em
+`assets/wakeword/saturnbmo.onnx`. Ele roda no PC, sem LLM, sem Whisper e sem
+internet, usando o mesmo áudio PCM de 16 kHz que o app já envia:
 
-Isso **não** é um detector acústico treinado para “Ei, BMO”. O arquivo `wakeword_hey_jarvis.onnx` do projeto original é o modelo “Hey Jarvis” e é preservado apenas como referência; ele não é usado como detector principal. Vamos adicionar wakeword e voz do BMO futuramente. Veja [docs/LIMITACOES.md](docs/LIMITACOES.md).
+```text
+PCM 16 kHz -> melspectrogram.onnx -> embedding_model.onnx -> saturnbmo.onnx
+```
 
-Vamos melhorar a deteccao de voz futuramente
+O modo padrão é `hybrid`: o detector acústico é a via principal e a validação
+pela transcrição do Whisper continua como fallback. O evento
+`wakeword.detected` informa `source: "acoustic"` e o score obtido.
+
+```json
+"wakeword": {
+  "enabled": true,
+  "mode": "hybrid",
+  "threshold": 0.75,
+  "acoustic_model": "../assets/wakeword/saturnbmo.onnx"
+}
+```
+
+Modos disponíveis:
+
+- `hybrid` (recomendado): acústico + fallback por transcrição.
+- `acoustic`: somente o classificador ONNX, sem fallback.
+- `transcript`: somente validação pela transcrição.
+
+Se os arquivos ONNX não estiverem presentes, o backend não quebra: registra um
+aviso e passa automaticamente para o modo `transcript`. Para testar o modelo
+com o microfone do PC, sem Android:
+
+```bash
+cd backend
+.venv/bin/python -m bmo_backend.wakeword_cli --list-devices
+.venv/bin/python -m bmo_backend.wakeword_cli --device "USB HIFI AUDIO" --threshold 0.75
+```
+
+O modelo é um protótipo treinado com dados sintéticos em ~4 h. Ele funciona,
+mas ainda tem falsos positivos e sensibilidade variável entre as pronúncias.
+Números medidos e limitações em
+[assets/wakeword/AVALIACAO_PER_PHRASE.md](assets/wakeword/AVALIACAO_PER_PHRASE.md)
+e [docs/LIMITACOES.md](docs/LIMITACOES.md).
 
 
 ## Build
@@ -218,7 +256,7 @@ cd backend
   --output /tmp/bmo-resposta-e2e.wav
 ```
 
-Resultado registrado: **36 testes de backend** e **3 testes unitários Android** passaram, e o E2E real retornou transcrição, resposta e áudio. Detalhes e limitações em [docs/EVIDENCIAS_TESTES.md](docs/EVIDENCIAS_TESTES.md).
+Resultado registrado: **47 testes de backend** e **3 testes unitários Android** passaram, e o E2E real retornou transcrição, resposta e áudio. Detalhes e limitações em [docs/EVIDENCIAS_TESTES.md](docs/EVIDENCIAS_TESTES.md).
 
 ## Segurança e privacidade
 
@@ -243,7 +281,7 @@ android-app/             App Android (Kotlin + Compose)
   app/src/main/java/com/spacexjr/saturnbmo/
   app/src/main/assets/faces/
   app/build.gradle.kts
-assets/                  Rosto original, licença e wakeword legado
+assets/                  Rosto original, licença e modelos de wakeword
 docs/                    Instalação, protocolo, segurança, limitações e evidências
 protocol/schemas/        Esquemas JSON do protocolo bmo/1
 scripts/                 Setup, build, E2E e utilitários

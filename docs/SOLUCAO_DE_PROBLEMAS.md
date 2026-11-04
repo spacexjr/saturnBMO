@@ -118,10 +118,21 @@ adb logcat -s BmoEngine BmoClient BmoAudio BmoPlayer
 
 ## O BMO não ouve “Ei, BMO”
 
-A detecção é por transcrição, não por modelo acústico. Se o Whisper não transcrever a frase, o backend não detecta.
+O modo padrão é `hybrid`: detector acústico ONNX com fallback por transcrição.
+Se o modelo acústico não detectar e o Whisper também não transcrever a frase, o
+backend não ativa.
 
+- Confirme no log do backend que o detector acústico foi carregado
+  (`Detector acústico carregado`). Se não, confira os três arquivos em
+  `assets/wakeword/`.
+- Teste o modelo com o microfone do PC:
+  `cd backend && .venv/bin/python -m bmo_backend.wakeword_cli --list-devices`.
 - Fale perto do microfone e sem ruído.
-- Diga “Ei, BMO” de forma clara.
+- Diga uma das pronúncias treinadas: “Ei, BMO”, “Hey BMO”, “Beemo” etc.
+- Se houver falsos positivos, aumente `wakeword.threshold` para `0.8` ou use
+  `wakeword.mode: "transcript"`.
+- Se o detector acústico falhar com frequência, use `hybrid` (padrão) ou
+  `transcript`; `acoustic` puro não tem fallback.
 - Confira o log de STT no app.
 - Use **Falar agora** para ativar sem a palavra de ativação.
 - Ajuste `vad_min_rms` em `backend/config.json` se o ambiente for barulhento.

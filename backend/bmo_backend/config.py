@@ -87,20 +87,32 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "wakeword": {
         "enabled": True,
-        "mode": "transcript",
+        # transcript = só STT; acoustic = só ONNX; hybrid = os dois (recomendado)
+        "mode": "hybrid",
         "phrases": [
             "ei bmo",
-            "ei bemo",
+            "ei beemo",
             "hey bmo",
-            "oi bmo",
-            "e bmo",
+            "hey beemo",
+            "be eme o",
+            "bê ême ó",
+            "ei be eme o",
+            "beemo",
+            "bi mo",
             "bmo",
         ],
-        "acoustic_model": None,
+        # Modelo acústico treinado no livekit-wakeword (independente do LLM).
+        "acoustic_model": "../assets/wakeword/saturnbmo.onnx",
+        "mel_model": "../assets/wakeword/melspectrogram.onnx",
+        "embedding_model": "../assets/wakeword/embedding_model.onnx",
+        "threshold": 0.75,
+        "cooldown_s": 2.0,
+        "hop_ms": 100,
+        "min_consecutive": 1,
         "note": (
-            "A palavra de ativação é validada pela transcrição (STT). "
-            "O wakeword.onnx original do projeto be-more-agent é 'Hey Jarvis' "
-            "e não reconhece 'Ei, BMO'; ele não é usado como detector principal."
+            "O detector acústico usa melspectrogram.onnx + embedding_model.onnx + "
+            "saturnbmo.onnx. Se os arquivos não existirem, o backend cai "
+            "automaticamente para a validação por transcrição."
         ),
     },
     "security": {
@@ -168,13 +180,15 @@ def load_config(config_file: str | Path | None = None) -> dict[str, Any]:
         ("weather", "latitude"): "BMO_WEATHER_LATITUDE",
         ("weather", "longitude"): "BMO_WEATHER_LONGITUDE",
         ("wakeword", "phrases"): "BMO_WAKEWORD",
+        ("wakeword", "acoustic_model"): "BMO_WAKEWORD_MODEL",
+        ("wakeword", "threshold"): "BMO_WAKEWORD_THRESHOLD",
     }
     for (section, key), env_name in env_map.items():
         value = os.environ.get(env_name)
         if value:
-            if key == "port":
+            if key in {"port", "threshold"}:
                 try:
-                    value = int(value)  # type: ignore[assignment]
+                    value = float(value) if key == "threshold" else int(value)  # type: ignore[assignment]
                 except ValueError as exc:
                     raise SystemExit(f"{env_name} deve ser um número") from exc
             if key == "phrases":
@@ -218,6 +232,9 @@ def resolve_runtime_paths(config: dict[str, Any]) -> None:
         ("stt", "model"),
         ("tts", "piper_binary"),
         ("tts", "voice_model"),
+        ("wakeword", "acoustic_model"),
+        ("wakeword", "mel_model"),
+        ("wakeword", "embedding_model"),
     ):
         config[section][key] = str(project_path(config[section].get(key)) or "")
     for key in ("log_file",):
