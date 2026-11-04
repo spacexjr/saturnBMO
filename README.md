@@ -259,6 +259,9 @@ tools/                   Binári  android-app/app/build/outputs/apk/release/app-
 - [Limitações conhecidas](docs/LIMITACOES.md)
 - [Evidências de teste](docs/EVIDENCIAS_TESTES.md)
 
+## 3D 
+Tem que imprimir em escala 113% 
+
 ## Licença e créditos
 
 Os rostos e o arquivo `wakeword_hey_jarvis.onnx` vêm do projeto original `be-more-agent`. Consulte [assets/ORIGINAL_LICENSE](assets/ORIGINAL_LICENSE). O código deste projeto é de uso local/educacional; revise as licenças das ferramentas e modelos de terceiros (Whisper.cpp, Piper, Ollama e modelos baixados) antes de redistribuir.
