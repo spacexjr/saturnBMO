@@ -1,0 +1,69 @@
+# Smoke test do pipeline saturnBMO — NÃO é o modelo final.
+# Uso: uv run livekit-wakeword run configs/saturnbmo_smoke.yaml
+# 10 clipes por pronúncia no treino, 2 na validação, 1 rodada de augmentação.
+
+model_name: saturnbmo_smoke
+
+target_phrases:
+  - "Hey BMO"
+  - "Hey Beemo"
+  - "Bê Ême Ó"
+  - "Ei, Bê Ême Ó"
+  - "Beemo"
+  - "bi-mo"
+  - "BMO"
+
+tts_backend: voxcpm
+
+voxcpm_tts:
+  model_id: openbmb/VoxCPM2
+  model_cache_relpath: voxcpm/VoxCPM2
+  local_model_path: null
+  load_denoiser: false
+  cfg_values: [2.0]
+  inference_timesteps_list: [10]
+  voice_design_prompts:
+    - "A young Brazilian woman from São Paulo, clear mid-pitch voice, natural pace, friendly"
+    - "A young Brazilian man from Rio de Janeiro, warm baritone, moderate pace, articulate"
+    - "An older Brazilian woman, soft gentle voice, slower pace, kind tone"
+    - "A Brazilian man from Pernambuco, nordestino accent, lively rhythm, strong projection"
+
+n_samples: 70
+n_samples_val: 14
+n_background_samples: 20
+n_background_samples_val: 4
+tts_batch_size: 1
+
+custom_negative_phrases:
+  - "Hey bro"
+  - "Hey Bruno"
+  - "Hey Google"
+  - "Hello BMO"
+  - "Ei, amor"
+  - "Bom dia, tudo bem?"
+  - "O computador está muito lento"
+  - "Desliga a luz, por favor"
+
+augmentation:
+  clip_duration: 2.0
+  batch_size: 8
+  rounds: 1
+  background_paths: [./data/backgrounds]
+  rir_paths: [./data/rirs]
+
+model:
+  model_type: conv_attention
+  model_size: tiny
+
+steps: 300
+learning_rate: 0.001
+weight_decay: 0.01
+label_smoothing: 0.05
+max_negative_weight: 1000
+target_fp_per_hour: 1.0
+
+batch_n_per_class:
+  positive: 8
+  adversarial_negative: 8
+  ACAV100M_sample: 0
+  background_noise: 8

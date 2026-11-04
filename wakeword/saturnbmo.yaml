@@ -1,0 +1,229 @@
+# =============================================================================
+# saturnBMO — wake word "BMO" em português brasileiro
+# =============================================================================
+#
+# Alvo: reconhecer com a MESMA prioridade as quatro pronúncias oficiais
+#       ("Hey BMO", "Hey Beemo", "Bê Ême Ó", "Ei, Bê Ême Ó") e também as
+#       variantes curtas "Beemo", "bi-mo" e "BMO".
+#
+# Instalação:
+#   uv sync --extra train --extra eval --extra export --extra voxcpm
+#   uv run livekit-wakeword setup --config configs/saturnbmo.yaml
+#   uv run livekit-wakeword run   configs/saturnbmo.yaml
+#
+# Hardware alvo: Ryzen 5 5600G / 16 GB RAM / RX 7600 8 GB (ROCm opcional).
+# Esta configuração NÃO assume CUDA. O classificador é pequeno e treina em CPU;
+# a geração VoxCPM2 usa GPU apenas se o PyTorch ROCm funcionar.
+#
+# Esquema: WakeWordConfig em src/livekit/wakeword/config.py
+# =============================================================================
+
+model_name: saturnbmo
+
+# -----------------------------------------------------------------------------
+# target_phrases — todas positivas, sem hierarquia.
+# -----------------------------------------------------------------------------
+# O backend VoxCPM distribui os clipes em round-robin pelo índice:
+#   phrases[i % len(phrases)]
+# Com 7 frases e n_samples múltiplo de 7, cada pronúncia recebe exatamente a
+# mesma quantidade de exemplos. NÃO reordene nem remova entradas sem manter
+# essa propriedade.
+#
+# "Bê Ême Ó" força a leitura brasileira das letras (B = bê, M = ême, O = ó).
+# "BMO" é mantido para o sintetizador aprender a forma escrita; a leitura
+# esperada continua sendo a brasileira, reforçada por "Bê Ême Ó".
+target_phrases:
+  - "Hey BMO"
+  - "Hey Beemo"
+  - "Bê Ême Ó"
+  - "Ei, Bê Ême Ó"
+  - "Beemo"
+  - "bi-mo"
+  - "BMO"
+
+# =============================================================================
+# Geração de dados
+# =============================================================================
+
+# VoxCPM2 é obrigatório para português: o Piper do repositório é en-US.
+tts_backend: voxcpm
+
+# 7000 clipes positivos = 1000 por pronúncia; 1400 de validação = 200 por
+# pronúncia. A validação é independente do treino (índices e prompts
+# diferentes), mas ainda é sintética — ver README_SATURNBMO.md, seção Limitações.
+n_samples: 7000
+n_samples_val: 1400
+
+# Ruído de fundo (MUSAN: música, fala ao fundo, ruído de ambiente).
+n_background_samples: 1500
+n_background_samples_val: 300
+
+# Ignorado pelo VoxCPM (síntese sequencial). Mantido para paridade de esquema.
+tts_batch_size: 4
+
+# -----------------------------------------------------------------------------
+# Negativos manuais
+# -----------------------------------------------------------------------------
+# NÃO incluímos "BMO" nem "Beemo" isolados aqui: eles são pronúncias positivas
+# oficiais. Incluir a palavra isolada como negativo ensinaria o modelo a
+# rejeitar exatamente o que queremos detectar.
+#
+# "Hello BMO" é um negativo válido: a frase é diferente da ativação, embora
+# contenha o nome. Isso ensina o modelo a exigir a construção de chamada.
+custom_negative_phrases:
+  # Foneticamente próximos / falsos amigos
+  - "Hey bro"
+  - "Hey Bruno"
+  - "Hey baby"
+  - "Hey Google"
+  - "Hello BMO"
+  - "Ei, amor"
+  - "Ei, Bruno"
+  - "Oi, Bruno"
+  - "Ei, Bia"
+  - "Hey mom"
+  - "Hey Bo"
+  - "Hey Emo"
+  - "Hey Nemo"
+  - "Hey memo"
+  - "Hey Bemol"
+  - "E aí, Bruno"
+  - "Oi, amor"
+  - "E-mail"
+  - "Bem-vindo"
+  - "Bebê"
+  - "Bimbo"
+  # Conversa cotidiana em português brasileiro
+  - "Bom dia, tudo bem?"
+  - "Boa tarde, como você está?"
+  - "Boa noite, até amanhã"
+  - "Você viu o jogo ontem?"
+  - "Pode me passar o sal?"
+  - "Que horas você chega?"
+  - "Eu preciso comprar leite"
+  - "Vamos almoçar mais tarde"
+  - "O computador está muito lento"
+  - "A música está boa"
+  - "Desliga a luz, por favor"
+  - "Tá bom, obrigado"
+  - "Não sei onde deixei a chave"
+  - "A reunião começa às três"
+  - "Me ajuda com essa conta"
+  - "O cachorro está latindo"
+  - "Está calor hoje"
+  - "Alô, quem fala?"
+  - "Bom trabalho"
+  - "Que dia é hoje?"
+  - "Eu moro em São Paulo"
+  - "Você pode falar mais devagar?"
+  - "Não entendi nada"
+  - "Vamos assistir um filme"
+  - "O ônibus atrasou de novo"
+
+# -----------------------------------------------------------------------------
+# VoxCPM2 — diversidade de vozes
+# -----------------------------------------------------------------------------
+# O prompt é concatenado como "(prompt)frase". Os prompts abaixo cobrem
+# gênero, idade, sotaques brasileiros, velocidade, volume, distância do
+# microfone e entonação. A geração percorre prompt × cfg × timesteps.
+voxcpm_tts:
+  model_id: openbmb/VoxCPM2
+  model_cache_relpath: voxcpm/VoxCPM2
+  local_model_path: null
+  load_denoiser: false
+  cfg_values: [1.5, 2.0, 2.5, 3.0]
+  inference_timesteps_list: [8, 10, 12]
+  voice_design_prompts:
+    # Mulheres jovens e adultas, sotaques brasileiros
+    - "A young Brazilian woman from São Paulo, clear mid-pitch voice, natural conversational pace, smiling and friendly"
+    - "A young Brazilian woman from Rio de Janeiro, bright carioca accent, lively pace, casual and warm"
+    - "A Brazilian woman in her thirties from Minas Gerais, soft mineiro accent, measured pace, calm and kind"
+    - "A Brazilian woman in her forties from Bahia, warm nordestino accent, relaxed pace, expressive"
+    - "A young Brazilian woman from Porto Alegre, gaúcho accent, slightly fast pace, confident"
+    - "A teenage Brazilian girl, light playful voice, quick casual speech, shy but cheerful"
+    - "An older Brazilian woman, gentle low volume, slow careful enunciation, grandmotherly tone"
+    - "A Brazilian woman speaking close to the microphone, intimate quiet voice, soft articulation"
+    # Homens jovens e adultos, sotaques brasileiros
+    - "A young Brazilian man from São Paulo, warm baritone, moderate pace, friendly and articulate"
+    - "A young Brazilian man from Rio de Janeiro, light carioca accent, quick conversational pace"
+    - "A Brazilian man in his thirties from Minas Gerais, calm mineiro accent, steady pace"
+    - "A Brazilian man in his forties from Pernambuco, nordestino accent, strong projection, lively rhythm"
+    - "A Brazilian man from Rio Grande do Sul, gaúcho accent, deep voice, deliberate pace"
+    - "A teenage Brazilian boy, light tenor, fast casual speech, slightly nasal"
+    - "An older Brazilian man, gravelly voice, slow pace, matter-of-fact delivery"
+    - "A Brazilian man speaking from across the room, distant voice, muffled and low volume"
+    # Variações de ritmo, intensidade e distância
+    - "A Brazilian Portuguese speaker, very fast speech, clipped syllables, energetic"
+    - "A Brazilian Portuguese speaker, very slow speech, long pauses, careful pronunciation"
+    - "A Brazilian Portuguese speaker, shouting from another room, loud but distant"
+    - "A Brazilian Portuguese speaker, whispering, quiet and breathy, close microphone"
+    - "A Brazilian Portuguese speaker, tired and subdued, low energy, steady pace"
+    - "A Brazilian Portuguese speaker, cheerful and animated, wide pitch range, lively"
+    - "A Brazilian Portuguese speaker, neutral news-anchor delivery, precise articulation"
+    - "A Brazilian Portuguese speaker, casual chat in a noisy kitchen, medium volume"
+    - "A Brazilian Portuguese speaker with a slight cold, nasal voice, medium pace"
+    - "A Brazilian Portuguese speaker with vocal fry, casual young adult, medium pace"
+    - "A Brazilian Portuguese speaker, strong regional caipira accent, slow drawl"
+    - "A Brazilian Portuguese speaker, subtle Portuguese-from-Portugal influence, clear vowels"
+    # Timbre / qualidade de gravação
+    - "A Brazilian Portuguese speaker on a phone call, narrow band, slightly distorted"
+    - "A Brazilian Portuguese speaker on a laptop microphone, roomy and slightly echoey"
+    - "A Brazilian Portuguese speaker in a large room, audible reverb, medium distance"
+    - "A Brazilian Portuguese speaker in a small car, close reflections, medium volume"
+    - "A Brazilian Portuguese speaker with a deep resonant voice, slow and clear"
+    - "A Brazilian Portuguese speaker with a high thin voice, quick and precise"
+    - "A Brazilian Portuguese speaker, gender-neutral delivery, soft volume, careful"
+    - "A Brazilian Portuguese speaker, formal and serious, minimal emotion, exact pronunciation"
+    - "A Brazilian Portuguese speaker, smiling while speaking, warm and inviting"
+    - "A Brazilian Portuguese speaker, asking a question, rising final intonation"
+    - "A Brazilian Portuguese speaker, calling someone, slightly raised volume"
+    - "A Brazilian Portuguese speaker, sleepy late-night voice, slow and quiet"
+
+# =============================================================================
+# Caminhos
+# =============================================================================
+
+data_dir: ./data
+output_dir: ./output
+
+# =============================================================================
+# Augmentação
+# =============================================================================
+
+augmentation:
+  # Janela fixa do embedding (16 timesteps). Não altere sem trocar o frontend.
+  clip_duration: 2.0
+  batch_size: 16
+  # 3 rodadas aumentam generalização; cada rodada lê a anterior.
+  rounds: 3
+  background_paths: [./data/backgrounds]
+  rir_paths: [./data/rirs]
+
+# =============================================================================
+# Modelo
+# =============================================================================
+# conv_attention medium: melhor separação temporal que DNN, com custo baixo.
+# Para exportar TFLite/openWakeWord seria necessário model_type: dnn, mas o
+# alvo do saturnBMO é ONNX Runtime no PC.
+model:
+  model_type: conv_attention
+  model_size: medium
+
+# =============================================================================
+# Treinamento
+# =============================================================================
+# Ajustado para 16 GB de RAM e ausência de GPU no treino do classificador.
+# O lote por passo é 120 amostras (40+40+40); o ACAV100M é opcional e fica em 0
+# quando não baixado. Se você baixar as features ACAV (~16 GB), use 512–1024.
+steps: 30000
+learning_rate: 0.0001
+weight_decay: 0.01
+label_smoothing: 0.05
+max_negative_weight: 3000
+target_fp_per_hour: 0.1
+
+batch_n_per_class:
+  positive: 40
+  adversarial_negative: 40
+  ACAV100M_sample: 0
+  background_noise: 40
