@@ -312,4 +312,4 @@ Tem que imprimir em escala 113%
 
 Os rostos e o arquivo legado `wakeword_hey_jarvis.onnx` vêm do projeto original `be-more-agent`. Consulte [assets/ORIGINAL_LICENSE](assets/ORIGINAL_LICENSE).
 
-O detector `saturnbmo.onnx` foi treinado com [livekit-wakeword](https://github.com/livekit/livekit-wakeword) e dados sintéticos; os modelos de mel e embedding acompanham o pipeline do livekit. O código deste projeto é de uso local/educacional; revise as licenças das ferramentas e modelos de terceiros (Whisper.cpp, Piper, Ollama, livekit-wakeword e modelos baixados) antes de redistribuir.
+O detector `saturnbmo.onnx` [nao testado] foi treinado com [livekit-wakeword](https://github.com/livekit/livekit-wakeword) e dados sintéticos; os modelos de mel e embedding acompanham o pipeline do livekit. O código deste projeto é de uso local/educacional; revise as licenças das ferramentas e modelos de terceiros (Whisper.cpp, Piper, Ollama, livekit-wakeword e modelos baixados) antes de redistribuir.
