@@ -99,12 +99,7 @@ check_file "Modelo Whisper" "$ROOT/tools/whisper-models/ggml-base.bin"
 check_file "Piper" "$ROOT/tools/piper/piper"
 check_file "Voz Piper pt-BR" "$ROOT/tools/voices/pt_BR-faber-medium.onnx"
 
-check_file "Wakeword saturnBMO" "$ROOT/assets/wakeword/saturnbmo.onnx"
-check_file "Wakeword mel" "$ROOT/assets/wakeword/melspectrogram.onnx"
-check_file "Wakeword embedding" "$ROOT/assets/wakeword/embedding_model.onnx"
-
 check_cmd "espeak-ng" "espeak-ng"
-check_cmd "arecord (teste do wakeword)" "arecord"
 check_cmd "ffmpeg" "ffmpeg"
 check_cmd "Ollama" "ollama"
 

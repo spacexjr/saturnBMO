@@ -32,11 +32,8 @@ O servidor aceita a conexão, valida o token e envia imediatamente um evento `he
   },
   "wakeword": {
     "enabled": true,
-    "mode": "hybrid",
-    "configured_mode": "hybrid",
-    "acoustic": true,
-    "threshold": 0.75,
-    "phrases": ["ei bmo", "ei beemo", "hey bmo", "hey beemo", "beemo", "bmo"]
+    "mode": "transcript",
+    "phrases": ["ei bmo", "ei bemo", "hey bmo", "oi bmo", "e bmo", "bmo"]
   },
   "capabilities": ["text", "audio", "tts", "vad", "get_time", "get_date", "get_weather"]
 }
@@ -113,7 +110,7 @@ Todos têm `type`, `seq` e `ts`, salvo indicação em contrário.
 | `audio.ready` | `format`, `sample_rate`, `channels` | Servidor pronto para receber áudio. |
 | `vad` | `speaking` | Início/fim de fala detectado. |
 | `transcript` | `text`, `final`, `source`, `duration_ms?` | Transcrição do áudio ou texto do usuário. |
-| `wakeword.detected` | `source`, `phrase`, `score?`, `transcript?` | Palavra de ativação encontrada (`source: acoustic` ou `transcript`). |
+| `wakeword.detected` | `phrase`, `transcript` | Palavra de ativação encontrada. |
 | `wakeword.activated` | `manual`, `message` | Ativação manual aceita. |
 | `wakeword.not_detected` | `reason?`, `message`, `transcript?` | Fala transcrita sem a palavra de ativação. |
 | `request.accepted` | `text` | Pedido aceito para resposta. |
@@ -183,32 +180,14 @@ Fluxo por texto: `text` → `transcript` → `assistant.text.delta` → `assista
 
 ## 5. Palavra de ativação
 
-A detecção acontece no backend em um de três modos (`wakeword.mode`):
+A detecção acontece no backend por **transcrição**, após o Whisper.cpp. O texto é normalizado (minúsculas, sem acentos/pontuação) e comparado com as frases configuradas em `wakeword.phrases`.
 
-| Modo | Comportamento |
-|---|---|
-| `hybrid` | Detector acústico ONNX principal + fallback por transcrição do Whisper. |
-| `acoustic` | Somente o detector acústico ONNX, sem fallback. |
-| `transcript` | Somente normalização e comparação do texto transcrito. |
+- Se a frase for encontrada e houver texto restante, o restante vira o pedido.
+- Se a frase for encontrada sozinha, o servidor responde “Pode falar!” e mantém a escuta.
+- Se não for encontrada, o servidor envia `wakeword.not_detected` e volta ao estado de escuta.
+- A ativação manual (`activate`) ignora a palavra de ativação uma vez.
 
-No modo acústico, o backend alimenta continuamente `saturnbmo.onnx` com o PCM
-recebido. Quando o score passa de `wakeword.threshold`, envia
-`wakeword.detected` com `source: "acoustic"` e o `score`.
-
-A validação por transcrição normaliza o texto (minúsculas, sem acentos e
-pontuação) e compara com `wakeword.phrases`:
-
-- se a frase for encontrada e houver texto restante, o restante vira o pedido;
-- se a frase for encontrada sozinha, o servidor responde “Pode falar!” e mantém
-  a escuta;
-- se não for encontrada, o servidor envia `wakeword.not_detected` e volta ao
-  estado de escuta;
-- a ativação manual (`activate`) ignora a palavra de ativação uma vez.
-
-Se os arquivos ONNX não estiverem disponíveis, o backend cai automaticamente
-para `transcript`, e o `hello` informa o modo efetivo em `wakeword.mode` e o
-modo configurado em `wakeword.configured_mode`. O modelo legado
-`wakeword_hey_jarvis.onnx` não é usado.
+Isso não é um modelo acústico de “Ei, BMO”. O `wakeword_hey_jarvis.onnx` legado não é usado.
 
 ## 6. Ações locais autorizadas
 

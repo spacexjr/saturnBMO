@@ -26,7 +26,6 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from .actions import ALLOWED_ACTIONS, detect_local_intent, parse_authorized_action
-from .acoustic_wakeword import AcousticWakeWord
 from .audio import EnergyVad, pcm16_to_wav
 from .config import DATA_DIR, load_config, public_config, resolve_runtime_paths
 from .discovery import start_discovery
@@ -75,8 +74,6 @@ class Services:
             config["wakeword"].get("phrases"),
             enabled=bool(config["wakeword"].get("enabled", True)),
         )
-        self.wake_acoustic = self._build_acoustic_detector(config["wakeword"])
-        self.wake_mode = self._resolve_wake_mode(config["wakeword"])
         self.started_at = time.time()
         self.audio_cache: dict[str, tuple[bytes, float]] = {}
         self.http_brains: dict[str, Any] = {}
@@ -85,49 +82,6 @@ class Services:
         self.stt_available = False
         self.llm_available: bool | None = None
         self.tts_available = self.tts.available()
-
-    def _build_acoustic_detector(self, cfg: dict[str, Any]) -> AcousticWakeWord | None:
-        """Carrega o detector acústico se configurado e disponível.
-
-        Falhas não derrubam o backend: caem de volta para o modo transcrição.
-        """
-        mode = str(cfg.get("mode", "transcript")).lower()
-        if not bool(cfg.get("enabled", True)) or mode not in {"acoustic", "hybrid"}:
-            return None
-        model = cfg.get("acoustic_model")
-        mel = cfg.get("mel_model")
-        embedding = cfg.get("embedding_model")
-        if not model:
-            log.warning("Wakeword acústico habilitado, mas acoustic_model não configurado.")
-            return None
-        try:
-            detector = AcousticWakeWord(
-                model_path=model,
-                mel_path=mel,
-                embedding_path=embedding,
-                threshold=float(cfg.get("threshold", 0.5)),
-                cooldown_s=float(cfg.get("cooldown_s", 2.0)),
-                hop_s=float(cfg.get("hop_ms", 100)) / 1000.0,
-                min_consecutive=int(cfg.get("min_consecutive", 1)),
-            )
-            log.info("Detector acústico carregado: %s (modo %s)", model, mode)
-            return detector
-        except Exception as exc:  # noqa: BLE001
-            log.warning("Detector acústico indisponível (%s); usando transcrição: %s", model, exc)
-            return None
-
-    def _resolve_wake_mode(self, cfg: dict[str, Any]) -> str:
-        """Retorna o modo efetivo, considerando o detector realmente carregado."""
-        mode = str(cfg.get("mode", "transcript")).lower()
-        if mode not in {"transcript", "acoustic", "hybrid"}:
-            log.warning("Modo de wakeword inválido (%s); usando transcript.", mode)
-            return "transcript"
-        if mode in {"acoustic", "hybrid"} and self.wake_acoustic is None:
-            log.warning(
-                "Modo de wakeword '%s' sem detector acústico; usando transcript.", mode
-            )
-            return "transcript"
-        return mode
 
     async def refresh_status(self, force: bool = False) -> dict[str, Any]:
         if not force and self._status_cache and time.time() - self._status_at < 10:
@@ -308,10 +262,7 @@ def create_app(config: dict[str, Any] | None = None, services: Services | None =
             },
             "wakeword": {
                 "enabled": bool(config["wakeword"]["enabled"]),
-                "mode": services.wake_mode,
-                "configured_mode": config["wakeword"].get("mode", "transcript"),
-                "acoustic": services.wake_acoustic is not None,
-                "threshold": config["wakeword"].get("threshold"),
+                "mode": config["wakeword"].get("mode", "transcript"),
                 "phrases": config["wakeword"].get("phrases", []),
                 "note": config["wakeword"].get("note", ""),
             },
@@ -517,11 +468,8 @@ class BmoSession:
             },
             wakeword={
                 "enabled": bool(self.config["wakeword"]["enabled"]),
-                "mode": self.services.wake_mode,
-                "configured_mode": self.config["wakeword"].get("mode", "transcript"),
+                "mode": self.config["wakeword"].get("mode", "transcript"),
                 "phrases": self.config["wakeword"].get("phrases", []),
-                "acoustic": self.services.wake_acoustic is not None,
-                "threshold": self.config["wakeword"].get("threshold"),
             },
             capabilities=["text", "audio", "tts", "vad", "location", "get_time", "get_date", "get_weather"],
         )
@@ -676,31 +624,8 @@ class BmoSession:
         if time.monotonic() < self._ignore_audio_until:
             self.vad.reset()
             return
-        if self.services.wake_acoustic is not None:
-            loop = asyncio.get_running_loop()
-            detections = await loop.run_in_executor(None, self.services.wake_acoustic.feed, data)
-            for detection in detections:
-                await self._on_acoustic_detection(detection)
         events = self.vad.feed(data)
         await self._process_vad_events(events)
-
-    async def _on_acoustic_detection(self, detection: Any) -> None:
-        """Ativação pelo classificador acústico (independente do LLM/STT)."""
-        if self.state in {"thinking", "speaking"}:
-            return
-        # Uma ativação já pendente não deve ser sobrescrita por outra.
-        if self.bypass_wake_once:
-            return
-        self.bypass_wake_once = True
-        await self.event(
-            "wakeword.detected",
-            source="acoustic",
-            phrase="saturnbmo",
-            score=round(float(detection.score), 4),
-            message="Palavra de ativação detectada.",
-        )
-        await self.set_state("listening", "Pode falar, estou ouvindo.")
-
 
     async def _process_vad_events(self, events: list[Any]) -> None:
         for event in events:
@@ -745,30 +670,10 @@ class BmoSession:
             await self.set_state(self.resting_state(), "Não entendi. Pode repetir?")
             return
 
-        wake_enabled = bool(self.config["wakeword"]["enabled"])
-        wake_mode = self.services.wake_mode
-        transcript_required = (
-            wake_enabled and wake_mode in {"transcript", "hybrid"} and not self.bypass_wake_once
-        )
-        acoustic_only = (
-            wake_enabled and wake_mode == "acoustic" and not self.bypass_wake_once
-        )
-        match = self.services.wake.detect(text) if wake_enabled else None
-
-        if acoustic_only:
-            # No modo acústico puro não há fallback por transcrição. Se o
-            # classificador não ativou antes desta fala, a fala é descartada.
-            await self.event(
-                "wakeword.not_detected",
-                reason="acoustic",
-                transcript=text,
-                message="Não ouvi a palavra de ativação. Diga 'Ei, BMO' ou toque em Falar.",
-            )
-            await self.set_state(self.resting_state(), "Aguardando 'Ei, BMO'.")
-            return
-
-        if transcript_required:
-            if not match or not match.detected:
+        wake_required = bool(self.config["wakeword"]["enabled"]) and not self.bypass_wake_once
+        if wake_required:
+            match = self.services.wake.detect(text)
+            if not match.detected:
                 await self.event(
                     "wakeword.not_detected",
                     transcript=text,
@@ -776,12 +681,7 @@ class BmoSession:
                 )
                 await self.set_state(self.resting_state(), "Aguardando 'Ei, BMO'.")
                 return
-            await self.event(
-                "wakeword.detected",
-                source="transcript",
-                phrase=match.matched_phrase,
-                transcript=text,
-            )
+            await self.event("wakeword.detected", phrase=match.matched_phrase, transcript=text)
             if not match.remaining_text:
                 self.bypass_wake_once = True
                 await self.event("assistant.text.delta", text="Pode falar!", id="wake-ack")
@@ -789,10 +689,6 @@ class BmoSession:
                                  audio_available=False)
                 await self.set_state(self.resting_state(), "Ouvindo...")
                 return
-            text = match.remaining_text
-        elif match is not None and match.detected and match.remaining_text:
-            # Ativação acústica: se o STT também transcreveu a frase de chamada,
-            # remova-a para o LLM receber apenas a pergunta.
             text = match.remaining_text
         self.bypass_wake_once = False
         await self.event("request.accepted", text=text)

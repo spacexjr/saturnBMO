@@ -4,9 +4,7 @@ BMO de mesa com rosto animado no Android e processamento de voz/IA no PC.
 
 O celular Android é a interface: mostra apenas o rosto do BMO em paisagem, captura o microfone e reproduz a voz. O PC executa o backend local com detecção de fala, transcrição, LLM e síntese de voz. O áudio não é enviado para nuvem.
 
-> Estado atual: funcional em rede local, com APK de depuração e APK release assinado localmente. A validação manual do app foi feita em um **Xiaomi 2412DPC0AI real** (Android 17) via Wi-Fi e USB. Veja [docs/EVIDENCIAS_TESTES.md](docs/EVIDENCIAS_TESTES.md).
->
-> O detector de wakeword acústico `saturnbmo.onnx` está integrado ao backend, mas **ainda não foi testado com voz humana ao vivo nem no celular**. A validação até agora é automatizada e com fixture de áudio. Veja [Limitações](docs/LIMITACOES.md).
+> Estado atual: funcional em rede local, com APK de depuração e APK release assinado localmente. A validação manual foi feita em um **Xiaomi 2412DPC0AI real** (Android 17) via Wi-Fi e USB. Veja [docs/EVIDENCIAS_TESTES.md](docs/EVIDENCIAS_TESTES.md).
 
 ## Funcionalidades
 
@@ -16,7 +14,6 @@ O celular Android é a interface: mostra apenas o rosto do BMO em paisagem, capt
 - Microfone PCM 16 kHz mono, em blocos de 20 ms.
 - Reprodução de voz em streaming no alto-falante.
 - Detecção de fala por energia (VAD) no PC.
-- Palavra de ativação acústica local (`saturnbmo.onnx`) com fallback por transcrição.
 - Transcrição local com whisper.cpp.
 - Respostas locais de hora/data sem passar pelo LLM.
 - Clima e previsão de chuva pela internet, usando o GPS do celular para localizar você.
@@ -39,11 +36,10 @@ O celular Android é a interface: mostra apenas o rosto do BMO em paisagem, capt
 │                             │  WebSocket bmo/1 + token   │                              │
 │  Rosto / Compose            │ <────────────────────────> │  FastAPI + Uvicorn           │
 │  AudioRecord 16 kHz PCM16   │      áudio binário         │  VAD por energia             │
-│  AudioTrack streaming       │                            │  saturnbmo.onnx (wakeword)   │
-│  Android Keystore (token)   │                            │  whisper.cpp (STT)           │
-│  Serviço em 1º plano        │                            │  Ollama (LLM)                │
-│                             │       UDP 8766             │  Piper / espeak-ng (TTS)     │
-│                             │                            │  cache de áudio em memória   │
+│  AudioTrack streaming       │                            │  whisper.cpp (STT)           │
+│  Android Keystore (token)   │                            │  Ollama (LLM)                │
+│  Serviço em 1º plano        │                            │  Piper / espeak-ng (TTS)     │
+│                             │       UDP 8766             │  cache de áudio em memória   │
 └─────────────────────────────┘                            └──────────────────────────────┘
 ```
 
@@ -54,9 +50,8 @@ O celular não executa LLM nem STT. O backend também não executa comandos arbi
 ### PC
 
 - Linux (testado no Fedora 44), Python 3.11+.
-- `ffmpeg` (usado pelo teste E2E), `espeak-ng` (fallback de voz) e `alsa-utils` (`arecord`, opcional para testar o wakeword no PC).
+- `ffmpeg` (usado pelo teste E2E), `espeak-ng` (fallback de voz).
 - [Ollama](https://ollama.com/) com um modelo local, por padrão `qwen3.5:2b`.
-- `onnxruntime` e `numpy` são instalados pelo `setup_backend.sh` e já vêm em `backend/requirements.txt`.
 - [whisper.cpp](https://github.com/ggml-org/whisper.cpp) com modelo `ggml-base.bin`.
 - [Piper](https://github.com/rhasspy/piper) com voz `pt_BR-faber-medium.onnx` (opcional se espeak-ng estiver disponível).
 - Portas `8765/tcp` e `8766/udp` liberadas na rede local.
@@ -77,7 +72,7 @@ cd /caminho/para/saturnBMO
 ./scripts/setup_backend.sh
 ```
 
-O script cria `backend/.venv`, instala as dependências Python (`numpy` e `onnxruntime` inclusos), gera o token em `backend/data/token`, confere as ferramentas e verifica os modelos do wakeword em `assets/wakeword/`. Ele não baixa modelos grandes automaticamente; siga [docs/INSTALACAO.md](docs/INSTALACAO.md) para instalar Whisper, Piper e o modelo do Ollama.
+O script cria `backend/.venv`, instala as dependências Python, gera o token em `backend/data/token` e confere as ferramentas. Ele não baixa modelos grandes automaticamente; siga [docs/INSTALACAO.md](docs/INSTALACAO.md) para instalar Whisper, Piper e o modelo do Ollama.
 
 Inicie o Ollama e baixe o modelo, se ainda não existir:
 
@@ -116,7 +111,7 @@ Para release assinado, veja [Build](#build). O APK release fica em `android-app/
 5. Toque em **Testar**. Devem aparecer LLM, STT e TTS como `ok`.
 6. Toque em **Salvar e conectar**.
 7. Autorize a localização quando o app pedir (ou use **Ajustes → Localização (clima)**). Ela é usada apenas para o clima.
-8. Toque no botão do microfone e diga **“Ei, BMO”** (ou “Hey BMO”, “Beemo”) seguido do pedido. No modo padrão `hybrid`, o detector acústico ativa primeiro e o Whisper serve de fallback.
+8. Toque no botão do microfone e diga **“Ei, BMO”** seguido do pedido.
 
 Atalho de desenvolvimento: o APK debug aceita extras de conexão:
 
@@ -152,48 +147,11 @@ O `adb reverse` é só para desenvolvimento; não substitui a conexão Wi-Fi rea
 
 ### Palavra de ativação
 
-O backend tem um detector acústico local treinado para o saturnBMO em
-`assets/wakeword/saturnbmo.onnx`. Ele roda no PC, sem LLM, sem Whisper e sem
-internet, usando o mesmo áudio PCM de 16 kHz que o app já envia:
+A palavra de ativação é **baseada na transcrição**. O áudio é transcrito pelo Whisper.cpp e o texto normalizado é comparado com `ei bmo`, `ei bemo`, `hey bmo`, `oi bmo`, `e bmo` e `bmo`.
 
-```text
-PCM 16 kHz -> melspectrogram.onnx -> embedding_model.onnx -> saturnbmo.onnx
-```
+Isso **não** é um detector acústico treinado para “Ei, BMO”. O arquivo `wakeword_hey_jarvis.onnx` do projeto original é o modelo “Hey Jarvis” e é preservado apenas como referência; ele não é usado como detector principal. Vamos adicionar wakeword e voz do BMO futuramente. Veja [docs/LIMITACOES.md](docs/LIMITACOES.md).
 
-O modo padrão é `hybrid`: o detector acústico é a via principal e a validação
-pela transcrição do Whisper continua como fallback. O evento
-`wakeword.detected` informa `source: "acoustic"` e o score obtido.
-
-```json
-"wakeword": {
-  "enabled": true,
-  "mode": "hybrid",
-  "threshold": 0.75,
-  "acoustic_model": "../assets/wakeword/saturnbmo.onnx"
-}
-```
-
-Modos disponíveis:
-
-- `hybrid` (recomendado): acústico + fallback por transcrição.
-- `acoustic`: somente o classificador ONNX, sem fallback.
-- `transcript`: somente validação pela transcrição.
-
-Se os arquivos ONNX não estiverem presentes, o backend não quebra: registra um
-aviso e passa automaticamente para o modo `transcript`. Para testar o modelo
-com o microfone do PC, sem Android:
-
-```bash
-cd backend
-.venv/bin/python -m bmo_backend.wakeword_cli --list-devices
-.venv/bin/python -m bmo_backend.wakeword_cli --device "USB HIFI AUDIO" --threshold 0.75
-```
-
-O modelo é um protótipo treinado com dados sintéticos em ~4 h. Ele funciona,
-mas ainda tem falsos positivos e sensibilidade variável entre as pronúncias.
-Números medidos e limitações em
-[assets/wakeword/AVALIACAO_PER_PHRASE.md](assets/wakeword/AVALIACAO_PER_PHRASE.md)
-e [docs/LIMITACOES.md](docs/LIMITACOES.md).
+Vamos melhorar a deteccao de voz futuramente
 
 
 ## Build
@@ -240,7 +198,7 @@ Os APKs e a pasta `android-app/keystore/` estão no `.gitignore`.
 Backend:
 
 ```bash
-cd backend
+cd backend  android-app/app/build/outputs/apk/release/app-release.apk
 .venv/bin/python -m pytest -q
 ```
 
@@ -260,7 +218,7 @@ cd backend
   --output /tmp/bmo-resposta-e2e.wav
 ```
 
-Resultado registrado: **47 testes de backend** e **3 testes unitários Android** passaram, e o E2E real retornou transcrição, resposta e áudio. Detalhes e limitações em [docs/EVIDENCIAS_TESTES.md](docs/EVIDENCIAS_TESTES.md).
+Resultado registrado: **36 testes de backend** e **3 testes unitários Android** passaram, e o E2E real retornou transcrição, resposta e áudio. Detalhes e limitações em [docs/EVIDENCIAS_TESTES.md](docs/EVIDENCIAS_TESTES.md).
 
 ## Segurança e privacidade
 
@@ -276,10 +234,8 @@ Resultado registrado: **47 testes de backend** e **3 testes unitários Android**
 ## Estrutura do projeto
 
 ```text
-backend/                 FastAPI, VAD, STT, LLM, TTS, wakeword, protocolo e testes
+backend/                 FastAPI, VAD, STT, LLM, TTS, protocolo e testes
   bmo_backend/
-    acoustic_wakeword.py Detector ONNX incremental
-    wakeword_cli.py      Teste do wakeword com microfone do PC
   tests/
   config.json
   run.sh
@@ -287,13 +243,11 @@ android-app/             App Android (Kotlin + Compose)
   app/src/main/java/com/spacexjr/saturnbmo/
   app/src/main/assets/faces/
   app/build.gradle.kts
-assets/                  Rosto original, licença e faces
-  wakeword/              saturnbmo.onnx + mel/embedding + avaliação
+assets/                  Rosto original, licença e wakeword legado
 docs/                    Instalação, protocolo, segurança, limitações e evidências
 protocol/schemas/        Esquemas JSON do protocolo bmo/1
 scripts/                 Setup, build, E2E e utilitários
-tools/                   Binários e modelos locais (não versionados)
-wakeword/                Configurações de treino e artefatos do modelo de wakeword
+tools/                   Binári  android-app/app/build/outputs/apk/release/app-release.apkos/modelos locais (não versionados)
 ```
 
 ## Documentação
@@ -310,6 +264,10 @@ Tem que imprimir em escala 113%
 
 ## Licença e créditos
 
+<<<<<<< HEAD
 Os rostos e o arquivo legado `wakeword_hey_jarvis.onnx` vêm do projeto original `be-more-agent`. Consulte [assets/ORIGINAL_LICENSE](assets/ORIGINAL_LICENSE).
 
 O detector `saturnbmo.onnx` [nao testado] foi treinado com [livekit-wakeword](https://github.com/livekit/livekit-wakeword) e dados sintéticos; os modelos de mel e embedding acompanham o pipeline do livekit. O código deste projeto é de uso local/educacional; revise as licenças das ferramentas e modelos de terceiros (Whisper.cpp, Piper, Ollama, livekit-wakeword e modelos baixados) antes de redistribuir.
+=======
+Os rostos e o arquivo `wakeword_hey_jarvis.onnx` vêm do projeto original `be-more-agent`. Consulte [assets/ORIGINAL_LICENSE](assets/ORIGINAL_LICENSE). O código deste projeto é de uso local/educacional; revise as licenças das ferramentas e modelos de terceiros (Whisper.cpp, Piper, Ollama e modelos baixados) antes de redistribuir.
+>>>>>>> 59f8aca (REVERSAO DE IMPLEMENTACAO DE WAKEWORD)

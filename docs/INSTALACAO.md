@@ -178,29 +178,6 @@ Para trocar o motor:
 
 Valores: `auto`, `piper`, `espeak`.
 
-## 6.1. Palavra de ativação (opcional)
-
-Os modelos do detector acústico já estão versionados em `assets/wakeword/`:
-
-```text
-assets/wakeword/saturnbmo.onnx
-assets/wakeword/melspectrogram.onnx
-assets/wakeword/embedding_model.onnx
-```
-
-As dependências `numpy` e `onnxruntime` são instaladas junto com
-`backend/requirements.txt`. O backend carrega o modelo automaticamente no modo
-`hybrid` (padrão). Para testar sem o celular:
-
-```bash
-cd backend
-.venv/bin/python -m bmo_backend.wakeword_cli --list-devices
-.venv/bin/python -m bmo_backend.wakeword_cli --device "USB HIFI AUDIO"
-```
-
-O CLI usa `arecord` (`alsa-utils`) e não precisa de PyAudio. Se os modelos
-estiverem ausentes, o backend continua funcionando no modo `transcript`.
-
 ## 7. Token de acesso
 
 O token é gerado automaticamente no primeiro uso e fica em:

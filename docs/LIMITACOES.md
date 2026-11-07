@@ -4,42 +4,23 @@ Este documento lista o que o projeto **não** garante. Ele é intencionalmente c
 
 ## 1. Palavra de ativação
 
-O backend tem um detector acústico local (`assets/wakeword/saturnbmo.onnx`)
-treinado com [livekit-wakeword](https://github.com/livekit/livekit-wakeword).
-O fluxo padrão (`mode: hybrid`) combina as duas vias:
+A detecção de “Ei, BMO” é **baseada na transcrição** do Whisper.cpp. O fluxo é:
 
 ```text
-áudio -> saturnbmo.onnx (acústico)       -> ativação rápida, sem STT
-      -> whisper.cpp -> texto -> frases  -> fallback por transcrição
+áudio -> whisper.cpp -> texto -> normalização -> comparação com frases
 ```
 
-Consequências e limitações:
+Isso não é um detector acústico dedicado. Consequências:
 
-- o modelo é um **protótipo** treinado em ~4 h com voz sintética (VoxCPM2), não
-  com o dataset completo de negativos reais (ACAV100M);
-- a taxa de falsos positivos medida foi de ~5,1% nas amostras de validação
-  (~92,5 FPPH), alta para uso prolongado em ambiente ruidoso;
-- a taxa de acerto limpo varia de 45% a 90% conforme a pronúncia; “BMO” isolado
-  é a mais fraca. Veja `assets/wakeword/AVALIACAO_PER_PHRASE.md`;
-- o detector precisa de uma janela de 2 s; em `mode: acoustic` (sem fallback)
-  frases muito curtas podem terminar antes da ativação;
-- `mode: hybrid` é o recomendado justamente porque a transcrição cobre falhas do
-  classificador;
-- ruído, sotaque, microfone longe, eco e processamento de áudio do celular
-  afetam as duas vias;
-- no modo `transcript`, se o Whisper transcrever errado, a palavra não é
-  detectada; a palavra “BMO” sozinha também ativa;
-- o arquivo `wakeword_hey_jarvis.onnx` do projeto original é o modelo
-  **“Hey Jarvis”** e não é usado como detector do saturnBMO.
+- se o Whisper transcrever errado, a palavra não é detectada;
+- ruído, sotaque, microfone longe e eco atrapalham;
+- a latência inclui o tempo de transcrição;
+- a palavra “BMO” sozinha também ativa, o que pode gerar falsos positivos;
+- não há modelo treinado especificamente para “Ei, BMO” neste projeto.
 
-No teste E2E sintético, a fala “Ei, BMO, que horas são?” foi transcrita como
-**“E BMO, que horas são?”** e ainda assim foi detectada pela frase normalizada
-`e bmo`. Isso mostra que a normalização ajuda, mas também que a transcrição não
-é perfeita.
+O arquivo `assets/wakeword_hey_jarvis.onnx` é o modelo **“Hey Jarvis”** do projeto original. Ele foi preservado como referência e **não** é usado como detector principal, porque não reconhece “Ei, BMO”.
 
-Para reduzir falsos positivos, aumente `wakeword.threshold` (ex.: `0.8`) ou use
-`mode: transcript`. Para aumentar a sensibilidade, diminua o threshold — ao
-custo de mais ativações acidentais.
+No teste E2E sintético, a fala “Ei, BMO, que horas são?” foi transcrita como **“E BMO, que horas são?”** e ainda assim foi detectada pela frase normalizada `e bmo`. Isso mostra que a normalização ajuda, mas também que a transcrição não é perfeita.
 
 ## 2. STT
 
@@ -122,6 +103,4 @@ custo de mais ativações acidentais.
 - Teste de token revogado, reconexão após queda de Wi-Fi e troca de rede.
 - Teste de carga com modelos maiores de LLM/STT.
 
-O detector acústico já está integrado, mas ainda precisa ser validado com voz
-humana ao vivo, em diferentes distâncias e ruídos, e idealmente retreinado com
-mais negativos reais antes de ser tratado como robusto para uso contínuo.
+Se você precisa de um detector acústico robusto de “Ei, BMO”, o próximo passo é treinar/adaptar um modelo de wake word específico e integrá-lo ao app ou ao backend. O modo atual por transcrição é uma solução funcional e transparente, não a ideal para todos os ambientes.

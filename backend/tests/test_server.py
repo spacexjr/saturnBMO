@@ -121,32 +121,6 @@ def silence(seconds, rate=16000):
     return b"\x00\x00" * int(seconds * rate)
 
 
-def test_wake_mode_falls_back_without_acoustic_detector():
-    services = Services.__new__(Services)
-    services.wake_acoustic = None
-    assert services._resolve_wake_mode({"mode": "acoustic"}) == "transcript"
-    assert services._resolve_wake_mode({"mode": "hybrid"}) == "transcript"
-    assert services._resolve_wake_mode({"mode": "transcript"}) == "transcript"
-    assert services._resolve_wake_mode({"mode": "invalido"}) == "transcript"
-
-    services.wake_acoustic = object()
-    assert services._resolve_wake_mode({"mode": "acoustic"}) == "acoustic"
-    assert services._resolve_wake_mode({"mode": "hybrid"}) == "hybrid"
-    assert services._resolve_wake_mode({"mode": "transcript"}) == "transcript"
-
-
-def test_info_exposes_effective_wakeword_mode(tmp_path):
-    app, services, _ = make_app(tmp_path)
-    services.wake_mode = "hybrid"
-    with TestClient(app) as client:
-        info = client.get("/api/v1/info", headers={"Authorization": f"Bearer {TOKEN}"})
-        assert info.status_code == 200
-        wake = info.json()["wakeword"]
-        assert wake["mode"] == "hybrid"
-        assert wake["configured_mode"] == "hybrid"
-        assert "acoustic" in wake
-
-
 def test_health_is_public_and_info_requires_token(tmp_path):
     app, _, _ = make_app(tmp_path)
     with TestClient(app) as client:
@@ -356,39 +330,3 @@ def test_websocket_audio_vad_wakeword_and_response(tmp_path):
             assert "assistant.text.done" in seen
             assert "audio.start" in seen
             assert got_audio
-
-
-def test_acoustic_only_mode_does_not_fall_back_to_transcript(tmp_path):
-    class SilentAcoustic:
-        def feed(self, _pcm):
-            return []
-
-    app, services, _ = make_app(tmp_path)
-    services.wake_acoustic = SilentAcoustic()
-    services.wake_mode = "acoustic"
-    with TestClient(app) as client:
-        with client.websocket_connect(
-            "/ws", headers={"Authorization": f"Bearer {TOKEN}"}
-        ) as ws:
-            hello = ws.receive_json()
-            assert hello["wakeword"]["mode"] == "acoustic"
-            ws.receive_json()  # state idle
-            ws.send_json(
-                {
-                    "type": "audio.start",
-                    "format": "pcm_s16le",
-                    "sample_rate": 16000,
-                    "channels": 1,
-                }
-            )
-            assert ws.receive_json()["type"] == "audio.ready"
-            pcm = tone(0.9) + silence(1.2)
-            for offset in range(0, len(pcm), 640):
-                ws.send_bytes(pcm[offset : offset + 640])
-            for _ in range(80):
-                event = ws.receive_json()
-                if event["type"] == "wakeword.not_detected":
-                    assert event["reason"] == "acoustic"
-                    break
-            else:
-                pytest.fail("wakeword.not_detected não foi enviado no modo acústico")
