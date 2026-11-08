@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -47,6 +48,12 @@ class BmoEngine private constructor(context: Context) {
         .readTimeout(8, TimeUnit.SECONDS)
         .build()
 
+    // O seletor de pasta nativo espera a pessoa escolher no PC; pode demorar.
+    private val httpLong = OkHttpClient.Builder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(300, TimeUnit.SECONDS)
+        .build()
+
     private val _ui = MutableStateFlow(BmoUiState())
     val uiState: StateFlow<BmoUiState> = _ui.asStateFlow()
 
@@ -63,6 +70,7 @@ class BmoEngine private constructor(context: Context) {
     private var reconnectJob: Job? = null
     private var connectTimeoutJob: Job? = null
     private var playbackJob: Job? = null
+    private var mediaPollJob: Job? = null
     private var wantListening = false
     private var manualDisconnect = false
     private var captureForTest = false
@@ -107,6 +115,8 @@ class BmoEngine private constructor(context: Context) {
         manualDisconnect = false
         reconnectJob?.cancel()
         connectTimeoutJob?.cancel()
+        mediaPollJob?.cancel()
+        mediaPollJob = null
         client?.close()
         client = null
         stopCaptureInternal(sendEnd = false)
@@ -146,7 +156,7 @@ class BmoEngine private constructor(context: Context) {
 
             override fun onClosed(code: Int, reason: String) {
                 if (manualDisconnect) return
-                connectionLost("Conexão encerrada pelo servidor (código $code).")
+                connectionLost(closeMessageFor(code), allowReconnect = !isAuthCloseCode(code))
             }
 
             override fun onFailure(message: String) {
@@ -175,6 +185,8 @@ class BmoEngine private constructor(context: Context) {
         stopCaptureInternal(sendEnd = false)
         stopMicTest()
         player.stop()
+        mediaPollJob?.cancel()
+        mediaPollJob = null
         client?.close()
         client = null
         _ui.update {
@@ -185,6 +197,8 @@ class BmoEngine private constructor(context: Context) {
                 listening = false,
                 statusDetail = "Desconectado.",
                 micLevel = 0f,
+                pendingConfirmation = null,
+                activity = null,
             )
         }
         addLog("INFO", "Desconectado manualmente.")
@@ -212,16 +226,27 @@ class BmoEngine private constructor(context: Context) {
         return false
     }
 
-    private fun connectionLost(message: String) {
+    /** 4401 = token recusado; 4400 = protocolo recusado. */
+    private fun isAuthCloseCode(code: Int): Boolean = code == 4401 || code == 4400
+
+    private fun closeMessageFor(code: Int): String = when (code) {
+        4401 -> "Token inválido ou ausente. Copie o token atual de backend/data/token e salve em Ajustes."
+        4400 -> "O servidor recusou o protocolo. Atualize o app e o backend."
+        else -> "Conexão encerrada pelo servidor (código $code)."
+    }
+
+    private fun connectionLost(message: String, allowReconnect: Boolean = true) {
         connectTimeoutJob?.cancel()
         client?.close()
         client = null
         stopCaptureInternal(sendEnd = false)
         player.stop()
         playbackJob?.cancel()
+        mediaPollJob?.cancel()
+        mediaPollJob = null
         _ui.update {
             it.copy(
-                connection = if (settings.autoConnect && settings.isConfigured)
+                connection = if (allowReconnect && settings.autoConnect && settings.isConfigured)
                     ConnectionState.RECONNECTING else ConnectionState.DISCONNECTED,
                 bmoState = BmoState.DISCONNECTED,
                 faceState = BmoState.DISCONNECTED,
@@ -229,10 +254,12 @@ class BmoEngine private constructor(context: Context) {
                 micLevel = 0f,
                 statusDetail = message,
                 lastError = message,
+                pendingConfirmation = null,
+                activity = null,
             )
         }
         addLog("ERRO", message)
-        if (settings.autoConnect && settings.isConfigured && !manualDisconnect) {
+        if (allowReconnect && settings.autoConnect && settings.isConfigured && !manualDisconnect) {
             val attempt = _ui.value.reconnectAttempt + 1
             val waitMs = min(15_000L, 1000L * (1 shl min(attempt, 4)))
             _ui.update { it.copy(reconnectAttempt = attempt) }
@@ -622,6 +649,194 @@ class BmoEngine private constructor(context: Context) {
     }
 
     // ------------------------------------------------------------------
+    // Pasta autorizada e mídia (HTTP autenticado)
+    // ------------------------------------------------------------------
+
+    fun refreshFolderStatus(callback: ((Result<FolderStatus>) -> Unit)? = null) {
+        if (!settings.isConfigured) return
+        scope.launch {
+            val result = runCatching {
+                val request = Request.Builder()
+                    .url("${settings.httpUrl}/api/v1/folder")
+                    .header("Authorization", "Bearer ${settings.token}")
+                    .build()
+                http.newCall(request).execute().use { response ->
+                    val body = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        throw IllegalStateException(httpMessage(response.code, body))
+                    }
+                    parseFolder(JSONObject(body))
+                }
+            }
+            result.onSuccess { folder ->
+                _ui.update { it.copy(folderStatus = folder) }
+            }
+            mainHandler.post { callback?.invoke(result) }
+        }
+    }
+
+    /** Abre o seletor nativo de pastas no PC (kdialog/zenity). */
+    fun selectFolder(callback: ((Result<FolderStatus>) -> Unit)? = null) {
+        if (!_ui.value.connected) {
+            fail("Conecte-se ao PC para escolher a pasta de acesso.")
+            return
+        }
+        scope.launch {
+            val result = runCatching {
+                val request = Request.Builder()
+                    .url("${settings.httpUrl}/api/v1/folder/select")
+                    .header("Authorization", "Bearer ${settings.token}")
+                    .post(ByteArray(0).toRequestBody())
+                    .build()
+                httpLong.newCall(request).execute().use { response ->
+                    val body = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        throw IllegalStateException(httpMessage(response.code, body))
+                    }
+                    val json = JSONObject(body)
+                    if (json.optBoolean("cancelled", false)) {
+                        _ui.value.folderStatus ?: parseFolder(json)
+                    } else {
+                        parseFolder(json)
+                    }
+                }
+            }
+            result.onSuccess { folder ->
+                _ui.update { it.copy(folderStatus = folder) }
+                addLog(
+                    "INFO",
+                    if (folder.authorized) "Pasta autorizada: ${folder.path}" else "Nenhuma pasta autorizada.",
+                )
+            }
+            result.onFailure { error ->
+                addLog("ERRO", "Seletor de pastas: ${error.message}")
+            }
+            mainHandler.post { callback?.invoke(result) }
+        }
+    }
+
+    fun revokeFolder(callback: ((Result<FolderStatus>) -> Unit)? = null) {
+        if (!_ui.value.connected) {
+            fail("Conecte-se ao PC para revogar o acesso à pasta.")
+            return
+        }
+        scope.launch {
+            val result = runCatching {
+                val request = Request.Builder()
+                    .url("${settings.httpUrl}/api/v1/folder/revoke")
+                    .header("Authorization", "Bearer ${settings.token}")
+                    .post(ByteArray(0).toRequestBody())
+                    .build()
+                http.newCall(request).execute().use { response ->
+                    val body = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        throw IllegalStateException(httpMessage(response.code, body))
+                    }
+                    parseFolder(JSONObject(body))
+                }
+            }
+            result.onSuccess { folder ->
+                _ui.update { it.copy(folderStatus = folder) }
+                addLog("INFO", "Acesso à pasta revogado.")
+            }
+            result.onFailure { error ->
+                addLog("ERRO", "Não foi possível revogar a pasta: ${error.message}")
+            }
+            mainHandler.post { callback?.invoke(result) }
+        }
+    }
+
+    fun refreshMedia(callback: ((Result<MusicInfo>) -> Unit)? = null) {
+        if (!settings.isConfigured) return
+        scope.launch {
+            val result = fetchMedia()
+            applyMedia(result)
+            mainHandler.post { callback?.invoke(result) }
+        }
+    }
+
+    private fun fetchMedia(): Result<MusicInfo> = runCatching {
+        val request = Request.Builder()
+            .url("${settings.httpUrl}/api/v1/media")
+            .header("Authorization", "Bearer ${settings.token}")
+            .build()
+        http.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw IllegalStateException(httpMessage(response.code, body))
+            }
+            parseMusic(JSONObject(body))
+        }
+    }
+
+    private fun applyMedia(result: Result<MusicInfo>) {
+        result.onSuccess { music ->
+            _ui.update { state ->
+                val merged = mergeMusic(state.music, music)
+                if (merged == state.music) state else state.copy(music = merged)
+            }
+        }
+    }
+
+    /** Mantém título/artista/estado atualizados mesmo sem o usuário pedir. */
+    private fun startMediaPolling() {
+        mediaPollJob?.cancel()
+        mediaPollJob = scope.launch {
+            while (true) {
+                delay(4_000)
+                applyMedia(fetchMedia())
+            }
+        }
+    }
+
+    private fun parseFolder(json: JSONObject): FolderStatus = FolderStatus(
+        path = json.optString("path"),
+        os = json.optString("os"),
+        selectedAt = json.optString("selected_at"),
+        authorized = json.optBoolean("authorized", false),
+        picker = json.optString("picker"),
+        displayAvailable = json.optBoolean("display_available", false),
+    )
+
+    private fun parseMusic(json: JSONObject): MusicInfo = MusicInfo(
+        player = json.optString("player"),
+        isBitchord = json.optBoolean("is_bitchord", false),
+        status = json.optString("status"),
+        title = json.optString("title"),
+        artist = json.optString("artist"),
+        album = json.optString("album"),
+        lengthS = if (json.has("length_s") && !json.isNull("length_s")) {
+            json.optDouble("length_s")
+        } else {
+            null
+        },
+        volume = if (json.has("volume") && !json.isNull("volume")) {
+            json.optDouble("volume").toFloat()
+        } else {
+            null
+        },
+        artUrl = json.optString("art_url"),
+    )
+
+    /** Eventos de controle de mídia podem vir sem metadados; preserva o que já existe. */
+    private fun mergeMusic(current: MusicInfo?, incoming: MusicInfo): MusicInfo {
+        if (current == null || incoming.title.isNotBlank()) return incoming
+        return incoming.copy(
+            title = current.title,
+            artist = current.artist,
+            album = current.album,
+            lengthS = incoming.lengthS ?: current.lengthS,
+            volume = incoming.volume ?: current.volume,
+            artUrl = incoming.artUrl.ifBlank { current.artUrl },
+        )
+    }
+
+    private fun httpMessage(code: Int, body: String): String {
+        val detail = runCatching { JSONObject(body).optString("error") }.getOrNull()
+        return if (detail.isNullOrBlank()) "O PC respondeu HTTP $code." else detail
+    }
+
+    // ------------------------------------------------------------------
     // Eventos do servidor
     // ------------------------------------------------------------------
 
@@ -732,6 +947,47 @@ class BmoEngine private constructor(context: Context) {
                 _ui.update { it.copy(statusDetail = message) }
                 addLog("AVISO", message)
             }
+            "activity" -> handleActivity(json)
+            "music" -> {
+                val incoming = parseMusic(json)
+                _ui.update { state ->
+                    state.copy(music = mergeMusic(state.music, incoming))
+                }
+                val title = incoming.title.ifBlank { _ui.value.music?.title.orEmpty() }
+                val artist = incoming.artist.ifBlank { _ui.value.music?.artist.orEmpty() }
+                if (title.isNotBlank() || artist.isNotBlank()) {
+                    addLog("INFO", "Música: ${listOf(title, artist).filter { it.isNotBlank() }.joinToString(" — ")}")
+                }
+            }
+            "confirmation.request" -> {
+                val info = ConfirmationInfo(
+                    id = json.optString("id"),
+                    tool = json.optString("tool"),
+                    prompt = json.optString("prompt", "Confirme a ação no PC."),
+                )
+                _ui.update {
+                    it.copy(
+                        pendingConfirmation = info,
+                        statusDetail = info.prompt,
+                    )
+                }
+                addLog("AVISO", info.prompt)
+            }
+            "confirmation.result" -> {
+                val approved = json.optBoolean("approved", false)
+                val ok = json.optBoolean("ok", false)
+                val message = json.optString("message", "")
+                _ui.update { it.copy(pendingConfirmation = null) }
+                addLog(
+                    if (ok) "INFO" else "AVISO",
+                    message.ifBlank {
+                        if (approved) "Ação confirmada." else "Ação cancelada."
+                    },
+                )
+            }
+            "request.accepted" -> {
+                _ui.update { it.copy(statusDetail = "Pedido recebido.") }
+            }
             "error" -> handleError(json)
             "pong" -> Unit
             "history.reset" -> {
@@ -766,7 +1022,10 @@ class BmoEngine private constructor(context: Context) {
         }
         addLog("INFO", "Conectado ao backend (protocolo $protocol, sessão $session).")
         refreshServiceStatus()
+        refreshFolderStatus()
+        refreshMedia()
         refreshLocation()
+        startMediaPolling()
         if (wantListening && capture?.isRunning != true) {
             startListening()
         }
@@ -803,6 +1062,63 @@ class BmoEngine private constructor(context: Context) {
             if (mapped == BmoState.ERROR) "ERRO" else "INFO",
             "Estado: ${mapped.label}${if (detail.isNotBlank()) " — $detail" else ""}"
         )
+    }
+
+    private fun handleActivity(json: JSONObject) {
+        val info = ActivityInfo(
+            activity = BmoActivity.fromCode(json.optString("activity")),
+            status = json.optString("status"),
+            label = json.optString("label"),
+            tool = json.optString("tool"),
+        )
+        if (info.activity == BmoActivity.NONE) return
+        _ui.update {
+            it.copy(
+                activity = info,
+                statusDetail = info.label.ifBlank { info.activity.label },
+            )
+        }
+        if (info.status == "start") {
+            addLog("INFO", info.label.ifBlank { info.activity.label })
+        }
+        // Sucesso/erro ficam visíveis por alguns segundos e depois somem.
+        if (info.status == "done" || info.status == "error") {
+            scope.launch {
+                delay(ACTIVITY_LINGER_MS)
+                _ui.update { state ->
+                    if (state.activity == info) state.copy(activity = null) else state
+                }
+            }
+        }
+        if (info.activity == BmoActivity.PLAYING_MUSIC) {
+            refreshMedia()
+        }
+    }
+
+    /** Resposta explícita a uma exclusão/ação destrutiva pendente. */
+    fun respondConfirmation(approved: Boolean) {
+        val pending = _ui.value.pendingConfirmation ?: return
+        if (!_ui.value.connected) {
+            fail("Conecte-se ao PC para confirmar a ação.")
+            return
+        }
+        val sent = sendJson(
+            JSONObject()
+                .put("type", "confirmation")
+                .put("id", pending.id)
+                .put("approved", approved)
+        )
+        if (sent) {
+            _ui.update {
+                it.copy(
+                    pendingConfirmation = null,
+                    statusDetail = if (approved) "Confirmando..." else "Cancelando...",
+                )
+            }
+            addLog("INFO", if (approved) "Ação confirmada." else "Ação cancelada.")
+        } else {
+            fail("Não foi possível enviar a confirmação.")
+        }
     }
 
     private fun handleServerAudio(bytes: ByteArray) {
@@ -901,6 +1217,7 @@ class BmoEngine private constructor(context: Context) {
     companion object {
         private const val TAG = "BmoEngine"
         private const val LOCATION_MAX_AGE_MS = 120_000L
+        private const val ACTIVITY_LINGER_MS = 3_500L
 
         @Volatile
         private var instance: BmoEngine? = null

@@ -1,5 +1,6 @@
 package com.spacexjr.saturnbmo.ui.face
 
+import com.spacexjr.saturnbmo.BmoActivity
 import com.spacexjr.saturnbmo.BmoState
 import com.spacexjr.saturnbmo.BmoUiState
 
@@ -10,14 +11,31 @@ import com.spacexjr.saturnbmo.BmoUiState
  */
 object BmoFaceController {
     fun visualFor(ui: BmoUiState): BmoFaceVisual {
-        val data = BmoFaceClassifier.classify(
+        var data = BmoFaceClassifier.classify(
             userText = ui.transcript,
             assistantText = ui.assistantText,
             calculating = ui.faceState == BmoState.THINKING,
         )
+        val music = ui.music
+        if (music != null && music.active) {
+            val musicContext = data.theme == BmoFaceTheme.NONE ||
+                data.theme.category == BmoFaceCategory.MUSIC ||
+                ui.activity?.activity == BmoActivity.PLAYING_MUSIC
+            if (musicContext) {
+                data = data.copy(
+                    theme = if (music.isPlaying) BmoFaceTheme.EQUALIZER else BmoFaceTheme.MUSIC,
+                    musicTitle = music.title.takeIf { it.isNotBlank() },
+                    musicArtist = music.artist.takeIf { it.isNotBlank() },
+                    musicPlaying = music.isPlaying,
+                    musicVolume = music.volume,
+                )
+            }
+        }
+        val activity = ui.activity?.activity ?: BmoActivity.NONE
         return BmoFaceVisual(
             data = data,
-            emotion = emotionFor(data.theme, ui.faceState, data.emotionHint),
+            emotion = emotionFor(data.theme, ui.faceState, data.emotionHint, activity),
+            activity = activity,
         )
     }
 
@@ -25,6 +43,7 @@ object BmoFaceController {
         theme: BmoFaceTheme,
         state: BmoState,
         hint: BmoFaceEmotion? = null,
+        activity: BmoActivity = BmoActivity.NONE,
     ): BmoFaceEmotion = when (state) {
         BmoState.ERROR -> BmoFaceEmotion.ERROR
         BmoState.SPEAKING -> BmoFaceEmotion.SPEAKING
@@ -33,7 +52,17 @@ object BmoFaceController {
             if (theme == BmoFaceTheme.CALCULATING) BmoFaceEmotion.PROCESSING
             else BmoFaceEmotion.THINKING
         BmoState.CONNECTING, BmoState.DISCONNECTED -> BmoFaceEmotion.NEUTRAL
-        BmoState.IDLE -> hint ?: emotionForTheme(theme)
+        BmoState.IDLE -> when (activity) {
+            BmoActivity.SUCCESS -> BmoFaceEmotion.HAPPY
+            BmoActivity.OPENING_APP, BmoActivity.CLOSING_APP,
+            BmoActivity.PLAYING_MUSIC, BmoActivity.WAITING_CONFIRMATION ->
+                BmoFaceEmotion.EXCITED
+            BmoActivity.SEARCHING_WEB, BmoActivity.SEARCHING_APPS,
+            BmoActivity.SEARCHING_FILES, BmoActivity.READING_WEB,
+            BmoActivity.READING_FILE, BmoActivity.PROCESSING ->
+                BmoFaceEmotion.PROCESSING
+            else -> hint ?: emotionForTheme(theme)
+        }
     }
 
     fun emotionForTheme(theme: BmoFaceTheme): BmoFaceEmotion = when (theme) {

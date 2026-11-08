@@ -150,6 +150,7 @@ fun BmoApp(engine: BmoEngine) {
                 onActivate = { beginListening(true) },
                 onInterrupt = { engine.interrupt() },
                 onSendText = { engine.sendText(it) },
+                onConfirmation = { approved -> engine.respondConfirmation(approved) },
             )
 
             Screen.SETTINGS -> Box(

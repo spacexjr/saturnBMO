@@ -82,16 +82,19 @@ O backend pode manter logs de eventos e erros. O app mantém até 300 entradas d
 
 Se você trocar o Ollama por um provedor remoto, a política de privacidade muda. O projeto padrão é local.
 
-## Comandos e LLM
+## Comandos, ferramentas e LLM
 
-O LLM pode sugerir ações, mas o backend só autoriza:
+O LLM pode chamar apenas ferramentas registradas pelo backend, com validação de argumentos. Não há execução de shell arbitrário nem `sudo` automático.
 
-- `get_time`
-- `get_date`
+- **Arquivos:** todas as operações passam por `Workspace`, que resolve o caminho real e exige que ele esteja dentro da pasta autorizada. `..` e links simbólicos que escapam da raiz são rejeitados. O acesso é revogável em **Ajustes → Pasta de acesso do BMO**.
+- **Exclusão:** `delete_file` e `delete_directory` não executam na primeira chamada. O backend envia `confirmation.request`; a ação só ocorre após `confirmation` com `approved: true` (ou “sim” por voz/texto). Mudar de assunto cancela.
+- **Internet:** `web_search`, `open_url`, `read_webpage`, `extract_page_content` e `summarize_web_content`. Conteúdo de páginas é tratado como não confiável (possível prompt injection). URLs privadas/loopback são bloqueadas por padrão (`tools.allow_private_urls=false`). O modelo não tem acesso livre à rede.
+- **Aplicativos:** abrir, fechar, minimizar, maximizar, restaurar e listar apps/janelas usando `.desktop`, XDG, Flatpak, AppImage e mecanismos do ambiente KDE. Processos críticos são protegidos. Em Wayland, algumas operações de janela podem ser recusadas pelo compositor.
+- **Mídia:** apenas MPRIS/D-Bus. O BitChord não é modificado nem reinstalado. Pesquisa de faixas não é exposta pelo BitChord 1.8.
+- **Sistema:** somente leitura de informações do sistema; serviços permitidos são uma lista fechada.
+- **Clima:** resolvido pelo backend com Open-Meteo antes do LLM, usando coordenadas do GPS do app.
 
-O clima (`get_weather`) é resolvido pelo backend antes do LLM, por meio de uma consulta HTTP ao Open-Meteo usando as coordenadas enviadas pelo GPS do app; o modelo não recebe acesso livre à rede.
-
-Qualquer outro JSON de ação é ignorado. Não há execução de shell, leitura de arquivos arbitrários, acesso à rede pelo modelo ou controle do aparelho. O prompt do sistema também instrui o modelo a não inventar ações.
+O prompt do sistema instrui o modelo a não inventar ações. Ainda assim, o modelo pode alucinar; a proteção real está na validação do backend, não nas instruções do prompt.
 
 ## HTTP sem TLS
 

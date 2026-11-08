@@ -24,6 +24,10 @@
     { "$ref": "#/$defs/audioEnd" },
     { "$ref": "#/$defs/audioStop" },
     { "$ref": "#/$defs/audioUnavailable" },
+    { "$ref": "#/$defs/activity" },
+    { "$ref": "#/$defs/music" },
+    { "$ref": "#/$defs/confirmationRequest" },
+    { "$ref": "#/$defs/confirmationResult" },
     { "$ref": "#/$defs/error" },
     { "$ref": "#/$defs/historyReset" }
   ],
@@ -128,11 +132,14 @@
     },
     "wakewordDetected": {
       "type": "object",
-      "required": ["type", "phrase", "transcript"],
+      "required": ["type", "phrase"],
       "properties": {
         "type": { "const": "wakeword.detected" },
         "phrase": { "type": "string" },
-        "transcript": { "type": "string" }
+        "transcript": { "type": "string" },
+        "source": { "enum": ["acoustic", "transcript"] },
+        "score": { "type": "number" },
+        "message": { "type": "string" }
       }
     },
     "wakewordActivated": {
@@ -217,6 +224,55 @@
       "properties": {
         "type": { "const": "audio.unavailable" },
         "reason": { "type": "string" },
+        "message": { "type": "string" }
+      }
+    },
+    "activity": {
+      "type": "object",
+      "required": ["type", "activity", "status"],
+      "properties": {
+        "type": { "const": "activity" },
+        "activity": { "type": "string" },
+        "status": { "enum": ["start", "done", "error"] },
+        "label": { "type": "string" },
+        "tool": { "type": "string" }
+      }
+    },
+    "music": {
+      "type": "object",
+      "required": ["type", "player"],
+      "properties": {
+        "type": { "const": "music" },
+        "player": { "type": "string" },
+        "is_bitchord": { "type": "boolean" },
+        "status": { "type": "string" },
+        "title": { "type": "string" },
+        "artist": { "type": "string" },
+        "album": { "type": "string" },
+        "length_s": { "type": ["number", "null"] },
+        "volume": { "type": ["number", "null"] },
+        "art_url": { "type": "string" },
+        "capabilities": { "type": "object" }
+      }
+    },
+    "confirmationRequest": {
+      "type": "object",
+      "required": ["type", "id", "tool", "prompt"],
+      "properties": {
+        "type": { "const": "confirmation.request" },
+        "id": { "type": "string" },
+        "tool": { "type": "string" },
+        "prompt": { "type": "string" }
+      }
+    },
+    "confirmationResult": {
+      "type": "object",
+      "required": ["type", "id", "approved", "ok", "message"],
+      "properties": {
+        "type": { "const": "confirmation.result" },
+        "id": { "type": "string" },
+        "approved": { "type": "boolean" },
+        "ok": { "type": "boolean" },
         "message": { "type": "string" }
       }
     },

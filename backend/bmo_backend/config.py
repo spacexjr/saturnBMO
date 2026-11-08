@@ -45,13 +45,26 @@ DEFAULT_CONFIG: dict[str, Any] = {
         ),
     },
     "stt": {
-        "engine": "whisper_cpp",
-        "binary": "../tools/whisper.cpp/build/bin/whisper-cli",
-        "model": "../tools/whisper-models/ggml-base.bin",
+        # Faster-Whisper é o mecanismo principal (roda no PC, nunca no Android).
+        "engine": "faster_whisper",
+        "model": "small",
+        "device": "cpu",
+        "compute_type": "int8",
         "language": "pt",
-        "threads": 4,
-        "timeout_s": 90,
-        "prompt": "Ei, BMO. Ei, BMO. Conversa em português do Brasil com o assistente BMO.",
+        "beam_size": 5,
+        "num_workers": 1,
+        "vad_filter": True,
+        "timeout_s": 180,
+        # Alternativa usada se o Faster-Whisper não estiver instalado.
+        "fallback": {
+            "engine": "whisper_cpp",
+            "binary": "../tools/whisper.cpp/build/bin/whisper-cli",
+            "model": "../tools/whisper-models/ggml-base.bin",
+            "language": "pt",
+            "threads": 4,
+            "timeout_s": 90,
+            "prompt": "Ei, BMO. Ei, BMO. Conversa em português do Brasil com o assistente BMO.",
+        },
     },
     "tts": {
         "engine": "auto",
@@ -87,26 +100,64 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "wakeword": {
         "enabled": True,
-        "mode": "transcript",
+        # hybrid = acústico como principal + transcrição como fallback.
+        "mode": "hybrid",
         "phrases": [
             "ei bmo",
+            "ei abmo",
+            "ei beemo",
             "ei bemo",
             "hey bmo",
-            "oi bmo",
-            "e bmo",
+            "hey beemo",
+            "be eme o",
+            "bê ême ó",
+            "ei be eme o",
+            "beemo",
+            "bi mo",
+            "abmo",
             "bmo",
         ],
-        "acoustic_model": None,
+        "acoustic_model": "../wakeword/saturnbmo.onnx",
+        "mel_model": "../wakeword/melspectrogram.onnx",
+        "embedding_model": "../wakeword/embedding_model.onnx",
+        "threshold": 0.75,
+        "cooldown_s": 2.0,
+        "hop_ms": 100,
+        "min_consecutive": 1,
         "note": (
-            "A palavra de ativação é validada pela transcrição (STT). "
-            "O wakeword.onnx original do projeto be-more-agent é 'Hey Jarvis' "
-            "e não reconhece 'Ei, BMO'; ele não é usado como detector principal."
+            "Modelo acústico saturnbmo.onnx treinado com livekit-wakeword. "
+            "Em modo hybrid, a transcrição continua como fallback."
         ),
     },
     "security": {
         "allowed_commands": ["get_time", "get_date"],
         "max_text_chars": 1000,
         "audio_cache_ttl_s": 300,
+    },
+    "tools": {
+        "enabled": True,
+        "max_tool_steps": 5,
+        "allow_private_urls": False,
+        "web": {
+            "enabled": True,
+            "timeout_s": 15,
+            "max_results": 5,
+            "search_endpoint": "https://html.duckduckgo.com/html/",
+        },
+        "apps": {
+            "enabled": True,
+            "allow_close": True,
+        },
+        "media": {
+            "enabled": True,
+            "preferred_players": ["bitchord"],
+            "timeout_s": 8,
+        },
+        "system": {
+            "enabled": True,
+            "allowed_services": ["pipewire", "wireplumber", "ollama"],
+        },
+        "access_file": "data/access.json",
     },
     "paths": {
         "log_file": "data/bmo-backend.log",
@@ -160,26 +211,48 @@ def load_config(config_file: str | Path | None = None) -> dict[str, Any]:
         ("llm", "base_url"): "BMO_OLLAMA_URL",
         ("llm", "model"): "BMO_LLM_MODEL",
         ("llm", "system_prompt"): "BMO_SYSTEM_PROMPT",
-        ("stt", "binary"): "BMO_STT_BINARY",
+        ("stt", "engine"): "BMO_STT_ENGINE",
         ("stt", "model"): "BMO_STT_MODEL",
+        ("stt", "device"): "BMO_STT_DEVICE",
+        ("stt", "compute_type"): "BMO_STT_COMPUTE_TYPE",
+        ("stt", "beam_size"): "BMO_STT_BEAM_SIZE",
+        ("stt", "language"): "BMO_STT_LANGUAGE",
+        ("stt", "fallback", "binary"): "BMO_STT_BINARY",
+        ("stt", "fallback", "model"): "BMO_STT_FALLBACK_MODEL",
         ("tts", "piper_binary"): "BMO_PIPER_BINARY",
         ("tts", "voice_model"): "BMO_TTS_VOICE",
         ("weather", "location"): "BMO_WEATHER_LOCATION",
         ("weather", "latitude"): "BMO_WEATHER_LATITUDE",
         ("weather", "longitude"): "BMO_WEATHER_LONGITUDE",
         ("wakeword", "phrases"): "BMO_WAKEWORD",
+        ("wakeword", "mode"): "BMO_WAKEWORD_MODE",
+        ("wakeword", "acoustic_model"): "BMO_WAKEWORD_MODEL",
+        ("wakeword", "threshold"): "BMO_WAKEWORD_THRESHOLD",
+        ("tools", "enabled"): "BMO_TOOLS_ENABLED",
     }
-    for (section, key), env_name in env_map.items():
+    for path, env_name in env_map.items():
         value = os.environ.get(env_name)
-        if value:
-            if key == "port":
-                try:
-                    value = int(value)  # type: ignore[assignment]
-                except ValueError as exc:
-                    raise SystemExit(f"{env_name} deve ser um número") from exc
-            if key == "phrases":
-                value = [phrase.strip() for phrase in value.split(",") if phrase.strip()]
-            config[section][key] = value
+        if not value:
+            continue
+        *parents, key = path
+        if key in {"port", "beam_size"}:
+            try:
+                value = int(value)  # type: ignore[assignment]
+            except ValueError as exc:
+                raise SystemExit(f"{env_name} deve ser um número") from exc
+        if key == "threshold":
+            try:
+                value = float(value)  # type: ignore[assignment]
+            except ValueError as exc:
+                raise SystemExit(f"{env_name} deve ser um número") from exc
+        if key == "enabled":
+            value = value.strip().lower() in {"1", "true", "sim", "yes", "on"}  # type: ignore[assignment]
+        if key == "phrases":
+            value = [phrase.strip() for phrase in value.split(",") if phrase.strip()]
+        target = config
+        for part in parents:
+            target = target.setdefault(part, {})
+        target[key] = value
 
     config["_config_file"] = str(path)
     config["_token"] = load_or_create_token(config)
@@ -213,13 +286,29 @@ def load_or_create_token(config: dict[str, Any]) -> str:
 
 
 def resolve_runtime_paths(config: dict[str, Any]) -> None:
-    for section, key in (
-        ("stt", "binary"),
-        ("stt", "model"),
+    for path in (
+        ("stt", "fallback", "binary"),
+        ("stt", "fallback", "model"),
         ("tts", "piper_binary"),
         ("tts", "voice_model"),
+        ("wakeword", "acoustic_model"),
+        ("wakeword", "mel_model"),
+        ("wakeword", "embedding_model"),
+        ("tools", "access_file"),
     ):
-        config[section][key] = str(project_path(config[section].get(key)) or "")
+        *section, key = path
+        target = config
+        ok = True
+        for part in section:
+            target = target.get(part, {}) if isinstance(target, dict) else {}
+            if not isinstance(target, dict):
+                ok = False
+                break
+        if not ok:
+            continue
+        current = target.get(key)
+        if current:
+            target[key] = str(project_path(str(current)) or "")
     for key in ("log_file",):
         config["paths"][key] = str(project_path(config["paths"].get(key)) or "")
 

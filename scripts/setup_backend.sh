@@ -94,14 +94,33 @@ check_cmd() {
 echo
 echo "[setup] Verificação de ferramentas"
 
-check_file "Whisper.cpp" "$ROOT/tools/whisper.cpp/build/bin/whisper-cli"
-check_file "Modelo Whisper" "$ROOT/tools/whisper-models/ggml-base.bin"
+# STT principal: o Faster-Whisper vem no requirements; o modelo é baixado no 1º uso.
+if .venv/bin/python -c "import faster_whisper" >/dev/null 2>&1; then
+    printf '%b\n' "${C3}[ok]${RESET} Faster-Whisper (modelo baixado no primeiro uso)"
+else
+    printf '%b\n' "${C5}[falta]${RESET} Faster-Whisper (pip install -r requirements.txt)"
+fi
+
+# Fallback opcional.
+check_file "Whisper.cpp (fallback opcional)" "$ROOT/tools/whisper.cpp/build/bin/whisper-cli"
+check_file "Modelo Whisper.cpp (fallback opcional)" "$ROOT/tools/whisper-models/ggml-base.bin"
 check_file "Piper" "$ROOT/tools/piper/piper"
 check_file "Voz Piper pt-BR" "$ROOT/tools/voices/pt_BR-faber-medium.onnx"
+check_file "Modelo de wakeword" "$ROOT/wakeword/saturnbmo.onnx"
 
 check_cmd "espeak-ng" "espeak-ng"
 check_cmd "ffmpeg" "ffmpeg"
 check_cmd "Ollama" "ollama"
+check_cmd "playerctl (MPRIS/BitChord)" "playerctl"
+check_cmd "busctl (MPRIS)" "busctl"
+
+if command -v kdialog >/dev/null 2>&1; then
+    printf '%b\n' "${C3}[ok]${RESET} Seletor de pastas: $(command -v kdialog)"
+elif command -v zenity >/dev/null 2>&1; then
+    printf '%b\n' "${C3}[ok]${RESET} Seletor de pastas: $(command -v zenity)"
+else
+    printf '%b\n' "${C5}[falta]${RESET} Seletor de pastas: instale kdialog (KDE) ou zenity"
+fi
 
 # Verifica os modelos locais sem obrigar o uso de um modelo específico
 echo

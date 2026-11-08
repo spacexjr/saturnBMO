@@ -9,6 +9,7 @@
   "oneOf": [
     { "$ref": "#/$defs/hello" },
     { "$ref": "#/$defs/ping" },
+    { "$ref": "#/$defs/location" },
     { "$ref": "#/$defs/audioStart" },
     { "$ref": "#/$defs/audioEnd" },
     { "$ref": "#/$defs/text" },
@@ -16,7 +17,8 @@
     { "$ref": "#/$defs/interrupt" },
     { "$ref": "#/$defs/playbackStarted" },
     { "$ref": "#/$defs/playbackDone" },
-    { "$ref": "#/$defs/reset" }
+    { "$ref": "#/$defs/reset" },
+    { "$ref": "#/$defs/confirmation" }
   ],
   "$defs": {
     "hello": {
@@ -35,6 +37,16 @@
       "properties": {
         "type": { "const": "ping" },
         "ts": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "location": {
+      "type": "object",
+      "required": ["type", "latitude", "longitude"],
+      "properties": {
+        "type": { "const": "location" },
+        "latitude": { "type": "number", "minimum": -90, "maximum": 90 },
+        "longitude": { "type": "number", "minimum": -180, "maximum": 180 },
+        "accuracy": { "type": "number", "minimum": 0 }
       }
     },
     "audioStart": {
@@ -95,6 +107,15 @@
       "required": ["type"],
       "properties": {
         "type": { "const": "reset" }
+      }
+    },
+    "confirmation": {
+      "type": "object",
+      "required": ["type", "id", "approved"],
+      "properties": {
+        "type": { "const": "confirmation" },
+        "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "approved": { "type": "boolean" }
       }
     }
   }

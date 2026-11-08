@@ -57,6 +57,89 @@ data class LogEntry(
     val message: String,
 )
 
+/** Operação real em andamento no PC, informada pelo backend. */
+enum class BmoActivity(val label: String, val shortLabel: String) {
+    NONE("", ""),
+    PROCESSING("Processando", "PENSANDO"),
+    SEARCHING_WEB("Pesquisando na web", "BUSCANDO"),
+    READING_WEB("Lendo página", "LENDO"),
+    SUMMARIZING_WEB("Resumindo conteúdo", "RESUMINDO"),
+    OPENING_APP("Abrindo aplicativo", "ABRINDO"),
+    CLOSING_APP("Fechando aplicativo", "FECHANDO"),
+    SEARCHING_APPS("Procurando aplicativo", "BUSCANDO"),
+    PLAYING_MUSIC("Música", "MÚSICA"),
+    READING_FILE("Lendo arquivo", "LENDO"),
+    CREATING_FILE("Criando arquivo", "CRIANDO"),
+    EDITING_FILE("Editando arquivo", "EDITANDO"),
+    SEARCHING_FILES("Procurando arquivos", "BUSCANDO"),
+    CHECKING_SYSTEM("Verificando sistema", "SISTEMA"),
+    WAITING_CONFIRMATION("Aguardando confirmação", "CONFIRMAR?"),
+    SUCCESS("Pronto", "PRONTO"),
+    ERROR("Erro", "ERRO"),
+    OTHER("Trabalhando", "TRABALHANDO");
+
+    companion object {
+        fun fromCode(code: String): BmoActivity = when (code.trim().lowercase()) {
+            "", "none" -> NONE
+            "processing" -> PROCESSING
+            "searching_web" -> SEARCHING_WEB
+            "reading_web" -> READING_WEB
+            "summarizing_web" -> SUMMARIZING_WEB
+            "opening_app" -> OPENING_APP
+            "closing_app" -> CLOSING_APP
+            "searching_apps" -> SEARCHING_APPS
+            "playing_music" -> PLAYING_MUSIC
+            "reading_file" -> READING_FILE
+            "creating_file" -> CREATING_FILE
+            "editing_file" -> EDITING_FILE
+            "searching_files" -> SEARCHING_FILES
+            "checking_system" -> CHECKING_SYSTEM
+            "waiting_confirmation" -> WAITING_CONFIRMATION
+            "success" -> SUCCESS
+            "error" -> ERROR
+            else -> OTHER
+        }
+    }
+}
+
+data class ActivityInfo(
+    val activity: BmoActivity = BmoActivity.NONE,
+    val status: String = "",
+    val label: String = "",
+    val tool: String = "",
+)
+
+/** Metadados reais do player MPRIS (BitChord e outros) enviados pelo PC. */
+data class MusicInfo(
+    val player: String = "",
+    val isBitchord: Boolean = false,
+    val status: String = "",
+    val title: String = "",
+    val artist: String = "",
+    val album: String = "",
+    val lengthS: Double? = null,
+    val volume: Float? = null,
+    val artUrl: String = "",
+) {
+    val isPlaying: Boolean get() = status.equals("playing", ignoreCase = true)
+    val active: Boolean get() = title.isNotBlank() || player.isNotBlank()
+}
+
+data class ConfirmationInfo(
+    val id: String = "",
+    val tool: String = "",
+    val prompt: String = "",
+)
+
+data class FolderStatus(
+    val path: String = "",
+    val os: String = "",
+    val selectedAt: String = "",
+    val authorized: Boolean = false,
+    val picker: String = "",
+    val displayAvailable: Boolean = false,
+)
+
 data class BmoUiState(
     val connection: ConnectionState = ConnectionState.DISCONNECTED,
     val bmoState: BmoState = BmoState.DISCONNECTED,
@@ -74,6 +157,12 @@ data class BmoUiState(
     val serverSessionId: String = "",
     val faceState: BmoState = BmoState.DISCONNECTED,
     val locationReady: Boolean = false,
+    val activity: ActivityInfo? = null,
+    val music: MusicInfo? = null,
+    val pendingConfirmation: ConfirmationInfo? = null,
+    val folderStatus: FolderStatus? = null,
 ) {
     val connected: Boolean get() = connection == ConnectionState.CONNECTED
+    val musicActive: Boolean get() = music?.active == true
+    val operationActive: Boolean get() = activity?.activity?.let { it != BmoActivity.NONE } == true
 }

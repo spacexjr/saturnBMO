@@ -1,5 +1,7 @@
 package com.spacexjr.saturnbmo.ui.face
 
+import com.spacexjr.saturnbmo.BmoActivity
+
 /** Categoria macro usada para agrupar as animações 8-bit. */
 enum class BmoFaceCategory {
     NEUTRAL,
@@ -72,13 +74,18 @@ data class BmoFaceData(
     val mathExpression: String? = null,
     val mathResult: String? = null,
     val formula: String? = null,
+    val musicTitle: String? = null,
+    val musicArtist: String? = null,
+    val musicPlaying: Boolean = false,
+    val musicVolume: Float? = null,
     val emotionHint: BmoFaceEmotion? = null,
 )
 
-/** Resultado completo da seleção de face: assunto + emoção + dados. */
+/** Resultado completo da seleção de face: assunto + emoção + operação real. */
 data class BmoFaceVisual(
     val data: BmoFaceData = BmoFaceData(),
     val emotion: BmoFaceEmotion = BmoFaceEmotion.NEUTRAL,
+    val activity: BmoActivity = BmoActivity.NONE,
 ) {
     val theme: BmoFaceTheme get() = data.theme
 }

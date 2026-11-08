@@ -71,6 +71,7 @@ fun MainScreen(
     onActivate: () -> Unit,
     onInterrupt: () -> Unit,
     onSendText: (String) -> Unit,
+    onConfirmation: (Boolean) -> Unit,
 ) {
     var showControls by remember { mutableStateOf(false) }
     var showTextDialog by remember { mutableStateOf(false) }
@@ -124,6 +125,31 @@ fun MainScreen(
             onSend = {
                 showTextDialog = false
                 onSendText(it)
+            },
+        )
+    }
+
+    ui.pendingConfirmation?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { onConfirmation(false) },
+            title = { Text("Confirmar ação") },
+            text = {
+                Column {
+                    Text(pending.prompt)
+                    if (pending.tool.isNotBlank()) {
+                        Text(
+                            "Ferramenta: ${pending.tool}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = BmoInkSoft,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = { onConfirmation(true) }) { Text("Confirmar") }
+            },
+            dismissButton = {
+                TextButton(onClick = { onConfirmation(false) }) { Text("Cancelar") }
             },
         )
     }

@@ -2,64 +2,69 @@
 
 BMO de mesa com rosto animado no Android e processamento de voz/IA no PC.
 
-O celular Android é a interface: mostra apenas o rosto do BMO em paisagem, captura o microfone e reproduz a voz. O PC executa o backend local com detecção de fala, transcrição, LLM e síntese de voz. O áudio não é enviado para nuvem.
+O celular Android é a interface: mostra o rosto do BMO em paisagem, captura o microfone e reproduz a voz. O PC executa o backend local com detecção de fala, transcrição, LLM, ferramentas e síntese de voz. Áudio e texto da conversa não são enviados para nuvem.
 
-> Estado atual: funcional em rede local, com APK de depuração e APK release assinado localmente. A validação manual foi feita em um **Xiaomi 2412DPC0AI real** (Android 17) via Wi-Fi e USB. Veja [docs/EVIDENCIAS_TESTES.md](docs/EVIDENCIAS_TESTES.md).
+> Estado atual: funcional em rede local. O backend e os testes automatizados rodam de ponta a ponta no PC. A validação com voz humana real da palavra de ativação acústica ainda está pendente; veja [Limitações](docs/LIMITACOES.md).
 
 ## Funcionalidades
 
 - Rosto do BMO ocupando a tela inteira, em paisagem, sem barras do sistema.
+- Cenas procedurais 8-bit desenhadas sobre os PNGs originais: clima, astronomia, matemática, ciência e música.
+- Música real do BitChord 1.8 via MPRIS: título, artista, estado e waveform/equalizador.
+- Indicadores procedurais das operações reais: pesquisando, lendo, abrindo/fechando app, arquivos, sistema, confirmação, sucesso e erro.
 - Controles escondidos: toque no rosto mostra/oculta; toque longo abre os ajustes.
-- Estados visuais: desconectado, conectando, aguardando, ouvindo, pensando, falando e erro.
-- Microfone PCM 16 kHz mono, em blocos de 20 ms.
-- Reprodução de voz em streaming no alto-falante.
-- Detecção de fala por energia (VAD) no PC.
-- Transcrição local com whisper.cpp.
-- Respostas locais de hora/data sem passar pelo LLM.
-- Clima e previsão de chuva pela internet, usando o GPS do celular para localizar você.
-- Conversa com Ollama em português do Brasil.
+- Microfone PCM 16 kHz mono, em blocos de 20 ms, com VAD por energia no PC.
+- STT local com **Faster-Whisper** (principal), modelo, `compute_type`, `beam_size`, VAD e idioma configuráveis.
+- Whisper.cpp preservado como fallback opcional.
+- Palavra de ativação em modo **híbrido**: classificador acústico `saturnbmo.onnx` + verificação por transcrição.
+- Conversa com Ollama em português do Brasil, com tool calling nativo.
 - Voz local com Piper (pt-BR) e fallback para espeak-ng.
+- Internet: `web_search`, `open_url`, `read_webpage`, `extract_page_content` e `summarize_web_content`.
+- Controle de aplicativos no KDE/Nobara: listar, abrir, fechar, minimizar, maximizar, restaurar e trazer para frente.
+- BitChord 1.8 via MPRIS/D-Bus: play, pause, próxima, anterior, parar e volume. Pesquisa de faixas não é exposta pelo MPRIS.
+- Arquivos confinados a uma pasta autorizada, escolhida por seletor nativo (`kdialog`/`zenity`): listar, buscar, ler, criar, editar, renomear, copiar, mover, excluir e metadados.
+- Exclusões exigem confirmação explícita no app ou por voz/texto.
+- Informações do sistema (CPU, memória, disco, uptime etc.) sem shell arbitrário.
 - WebSocket autenticado por token e protocolo versionado `bmo/1`.
 - Descoberta do PC na rede local por UDP broadcast.
-- Reconexão automática com espera progressiva.
-- Serviço em primeiro plano para escutar com a tela desligada.
-- Configuração de IP, porta, token, volume, tela ligada, reconexão e escuta em segundo plano.
-- Testes de alto-falante e de nível do microfone.
-- Logs de diagnóstico no app e no backend.
-- Sem câmera, sem gravação de áudio em arquivo e sem comandos de shell.
+- Reconexão automática, serviço em primeiro plano e logs de diagnóstico.
+- Sem câmera, sem gravação de áudio em arquivo e sem comandos de shell arbitrários.
 
 ## Arquitetura
 
 ```text
-┌─────────────────────────────┐        Wi-Fi local         ┌──────────────────────────────┐
-│ Celular Android             │                            │ PC Linux                     │
-│                             │  WebSocket bmo/1 + token   │                              │
-│  Rosto / Compose            │ <────────────────────────> │  FastAPI + Uvicorn           │
-│  AudioRecord 16 kHz PCM16   │      áudio binário         │  VAD por energia             │
-│  AudioTrack streaming       │                            │  whisper.cpp (STT)           │
-│  Android Keystore (token)   │                            │  Ollama (LLM)                │
-│  Serviço em 1º plano        │                            │  Piper / espeak-ng (TTS)     │
-│                             │       UDP 8766             │  cache de áudio em memória   │
-└─────────────────────────────┘                            └──────────────────────────────┘
+┌─────────────────────────────┐        Wi-Fi local         ┌──────────────────────────────────┐
+│ Celular Android             │                            │ PC Linux (Nobara/KDE)            │
+│                             │  WebSocket bmo/1 + token   │                                  │
+│  Rosto / Compose            │ <────────────────────────> │  FastAPI + Uvicorn               │
+│  AudioRecord 16 kHz PCM16   │      áudio binário         │  VAD + Faster-Whisper (STT)      │
+│  AudioTrack streaming       │                            │  Wakeword ONNX + transcrição     │
+│  Android Keystore (token)   │                            │  Ollama (LLM + ferramentas)      │
+│  Serviço em 1º plano        │                            │  Piper / espeak-ng (TTS)         │
+│                             │       UDP 8766             │  MPRIS, XDG, arquivos, internet  │
+└─────────────────────────────┘                            └──────────────────────────────────┘
 ```
 
-O celular não executa LLM nem STT. O backend também não executa comandos arbitrários: as únicas ações locais autorizadas são `get_time` e `get_date`.
+O celular não executa LLM nem STT. As ferramentas locais são expostas ao modelo por um registro validado; não há execução de shell arbitrário. Operações destrutivas de arquivo passam por confirmação.
 
 ## Requisitos
 
 ### PC
 
-- Linux (testado no Fedora 44), Python 3.11+.
-- `ffmpeg` (usado pelo teste E2E), `espeak-ng` (fallback de voz).
-- [Ollama](https://ollama.com/) com um modelo local, por padrão `qwen3.5:2b`.
-- [whisper.cpp](https://github.com/ggml-org/whisper.cpp) com modelo `ggml-base.bin`.
-- [Piper](https://github.com/rhasspy/piper) com voz `pt_BR-faber-medium.onnx` (opcional se espeak-ng estiver disponível).
+- Linux (testado no Fedora/Nobara, Python 3.12).
+- Python 3.11+ e `ffmpeg`.
+- [Ollama](https://ollama.com/) com um modelo local; o padrão do repositório é `qwen3:8b`.
+- [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper) (instalado via `requirements.txt`; o modelo é baixado no primeiro uso).
+- [Piper](https://github.com/rhasspy/piper) com voz `pt_BR-faber-medium.onnx`; `espeak-ng` como fallback.
+- `playerctl` e/ou `busctl` para MPRIS/BitChord.
+- `kdialog` (KDE) ou `zenity` para o seletor nativo de pastas.
 - Portas `8765/tcp` e `8766/udp` liberadas na rede local.
+- Internet no PC apenas para as ferramentas web. Clima usa Open-Meteo.
 
 ### Android
 
-- Android 8.0+ (API 26+). Testado em Android 17 (API 37).
-- Permissão de microfone.
+- Android 8.0+ (API 26+).
+- Permissão de microfone; localização opcional para clima.
 - Mesma rede Wi-Fi do PC, ou USB com `adb reverse` para testes.
 - APK de depuração para desenvolvimento; release para uso normal.
 
@@ -72,14 +77,16 @@ cd /caminho/para/saturnBMO
 ./scripts/setup_backend.sh
 ```
 
-O script cria `backend/.venv`, instala as dependências Python, gera o token em `backend/data/token` e confere as ferramentas. Ele não baixa modelos grandes automaticamente; siga [docs/INSTALACAO.md](docs/INSTALACAO.md) para instalar Whisper, Piper e o modelo do Ollama.
+O script cria `backend/.venv`, instala as dependências, gera o token em `backend/data/token` e confere as ferramentas. Ele não baixa modelos grandes automaticamente; siga [docs/INSTALACAO.md](docs/INSTALACAO.md) para Piper, Faster-Whisper e Ollama.
 
 Inicie o Ollama e baixe o modelo, se ainda não existir:
 
 ```bash
 ollama serve
-ollama pull qwen3.5:2b
+ollama pull qwen3:8b
 ```
+
+Se o PC tiver pouca memória, troque `llm.model` em `backend/config.json` por um modelo menor disponível em `ollama list`.
 
 Inicie o backend:
 
@@ -93,37 +100,38 @@ Saída esperada: API em `http://0.0.0.0:8765` e descoberta UDP na porta 8766. O 
 cat backend/data/token
 ```
 
-### 2. Gerar e instalar o APK
+### 2. Autorizar uma pasta no PC
+
+No app: **Ajustes → Pasta de acesso do BMO → Escolher pasta no PC**. O seletor nativo abre na tela do PC. A escolha fica em `backend/data/access.json` e pode ser revogada a qualquer momento. Sem pasta autorizada, as ferramentas de arquivo recusam todas as operações.
+
+### 3. Gerar e instalar o APK
 
 ```bash
 ./scripts/build_android.sh debug
 adb install -r android-app/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Para release assinado, veja [Build](#build). O APK release fica em `android-app/app/build/outputs/apk/release/app-release.apk`.
+Para release assinado, veja [Build](#build).
 
-### 3. Configurar no celular
+### 4. Configurar no celular
 
 1. Abra o app. A tela deve mostrar somente o rosto do BMO.
-2. Toque no rosto para mostrar os controles.
-3. Toque em **⚙ Ajustes** (ou toque e segure o rosto).
-4. Informe o IP do PC, a porta `8765` e o token de `backend/data/token`.
-5. Toque em **Testar**. Devem aparecer LLM, STT e TTS como `ok`.
-6. Toque em **Salvar e conectar**.
-7. Autorize a localização quando o app pedir (ou use **Ajustes → Localização (clima)**). Ela é usada apenas para o clima.
-8. Toque no botão do microfone e diga **“Ei, BMO”** seguido do pedido.
+2. Toque no rosto e em **⚙ Ajustes** (ou toque e segure).
+3. Informe o IP do PC, a porta `8765` e o token de `backend/data/token`.
+4. Toque em **Testar**. LLM, STT e TTS devem aparecer como `ok`.
+5. Toque em **Salvar e conectar**.
+6. Autorize a localização quando pedido (opcional, usada apenas para clima).
+7. Toque no botão do microfone e diga **“Ei, BMO”** seguido do pedido.
 
 Atalho de desenvolvimento: o APK debug aceita extras de conexão:
 
 ```bash
-adb install -r android-app/app/build/outputs/apk/debug/app-debug.apk
 adb shell am start -n com.spacexjr.saturnbmo.debug/com.spacexjr.saturnbmo.MainActivity \
-  --es bmo_host 192.168.3.24 \
-  --ei bmo_port 8765 \
+  --es bmo_host 192.168.0.10 --ei bmo_port 8765 \
   --es bmo_token "$(cat backend/data/token)"
 ```
 
-Troque `192.168.3.24` pelo IP do seu PC. Em caso de bloqueio de Wi-Fi, para teste via USB:
+Para teste via USB:
 
 ```bash
 adb reverse tcp:8765 tcp:8765
@@ -132,27 +140,46 @@ adb shell am start -n com.spacexjr.saturnbmo.debug/com.spacexjr.saturnbmo.MainAc
   --es bmo_token "$(cat backend/data/token)"
 ```
 
-O `adb reverse` é só para desenvolvimento; não substitui a conexão Wi-Fi real.
-
 ## Uso
 
 - **Rosto somente:** o app abre sem botões. Toque no rosto para revelar os controles.
-- **Ajustes:** toque no rosto e depois em **⚙ Ajustes**, ou toque e segure o rosto.
 - **Falar agora:** ativa o microfone e ignora a palavra de ativação uma vez.
-- **Digitar:** abre uma conversa por texto, útil se o microfone ou o TTS falharem.
-- **Microfone:** o botão redondo inicia/para a captura. Com a escuta em segundo plano ativa, o serviço mantém o microfone com a tela apagada.
+- **Digitar:** conversa por texto, útil se o microfone ou o TTS falharem.
+- **Confirmação:** exclusões mostram um diálogo com **Confirmar** e **Cancelar**; também é possível responder “sim” ou “não” por voz/texto.
 - **Parar fala:** interrompe a reprodução e a resposta em andamento.
-- **Testar alto-falante:** emite um tom de 440 Hz.
-- **Testar microfone:** mostra o nível local; não envia áudio ao PC.
+- **Testar alto-falante/microfone:** tom de 440 Hz e medidor local de nível.
 
 ### Palavra de ativação
 
-A palavra de ativação é **baseada na transcrição**. O áudio é transcrito pelo Whisper.cpp e o texto normalizado é comparado com `ei bmo`, `ei bemo`, `hey bmo`, `oi bmo`, `e bmo` e `bmo`.
+O modo padrão é **hybrid**:
 
-Isso **não** é um detector acústico treinado para “Ei, BMO”. O arquivo `wakeword_hey_jarvis.onnx` do projeto original é o modelo “Hey Jarvis” e é preservado apenas como referência; ele não é usado como detector principal. Vamos adicionar wakeword e voz do BMO futuramente. Veja [docs/LIMITACOES.md](docs/LIMITACOES.md).
+- o classificador acústico ONNX (`wakeword/saturnbmo.onnx`) roda no áudio de entrada;
+- a transcrição do Faster-Whisper continua como fallback;
+- frases aceitas incluem “Ei BMO”, “Hey BMO”, “Hey Beemo”, “Be eme ó” e variantes normalizadas;
+- há cooldown e o BMO ignora o próprio áudio durante a fala.
 
-Vamos melhorar a deteccao de voz futuramente
+O modelo acústico e os modelos de mel/embedding estão em `wakeword/`. A detecção foi validada apenas com áudio sintético; **áudio de voz humana real ainda precisa ser testado**. Veja [Limitações](docs/LIMITACOES.md).
 
+## Configuração
+
+O arquivo principal é `backend/config.json`. Variáveis de ambiente sobrescrevem valores (`BMO_HOST`, `BMO_PORT`, `BMO_LLM_MODEL`, `BMO_STT_MODEL`, `BMO_STT_COMPUTE_TYPE`, `BMO_WAKEWORD_MODE`, `BMO_TOOLS_ENABLED`, etc.). O token pode vir de `BMO_TOKEN`.
+
+Principais opções de STT:
+
+```json
+"stt": {
+  "engine": "faster_whisper",
+  "model": "medium",
+  "device": "cpu",
+  "compute_type": "int8",
+  "language": "pt",
+  "beam_size": 5,
+  "num_workers": 1,
+  "vad_filter": true
+}
+```
+
+`medium`/`int8` é o padrão atual: melhor precisão que o `small`, com ~3,4 s de inferência para ~1,7 s de áudio em CPU (medido nesta máquina). Se a latência incomodar, volte para `small`; modelos maiores aumentam memória e tempo.
 
 ## Build
 
@@ -178,38 +205,25 @@ Depois:
 ./scripts/build_android.sh release
 ```
 
-O script lê `android-app/keystore/keystore.properties` e exporta `BMO_KEYSTORE`, `BMO_KEY_ALIAS`, `BMO_STORE_PASSWORD` e `BMO_KEY_PASSWORD` para o Gradle. O APK fica em:
-
-```text
-android-app/app/build/outputs/apk/release/app-release.apk
-```
-
-Verificação da assinatura:
-
-```bash
-"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs \
-  android-app/app/build/outputs/apk/release/app-release.apk
-```
-
-Os APKs e a pasta `android-app/keystore/` estão no `.gitignore`.
+O APK fica em `android-app/app/build/outputs/apk/release/app-release.apk`.
 
 ## Testes
 
 Backend:
 
 ```bash
-cd backend  android-app/app/build/outputs/apk/release/app-release.apk
+cd backend
 .venv/bin/python -m pytest -q
 ```
 
-Testes unitários do Android:
+Android:
 
 ```bash
 cd android-app
-./gradlew testDebugUnitTest
+JAVA_HOME=/caminho/para/jdk-17-ou-21 ./gradlew testDebugUnitTest
 ```
 
-Teste E2E com serviços reais (Whisper, Piper, Ollama e backend):
+Teste E2E com serviços reais (Faster-Whisper, Piper, Ollama e backend):
 
 ```bash
 cd backend
@@ -218,23 +232,23 @@ cd backend
   --output /tmp/bmo-resposta-e2e.wav
 ```
 
-Resultado registrado: **36 testes de backend** e **3 testes unitários Android** passaram, e o E2E real retornou transcrição, resposta e áudio. Detalhes e limitações em [docs/EVIDENCIAS_TESTES.md](docs/EVIDENCIAS_TESTES.md).
+Estado atual: **76 testes de backend** e **17 testes unitários Android** passam. A validação manual em aparelho real e com voz humana ainda deve ser refeita para o conjunto atual; veja [docs/EVIDENCIAS_TESTES.md](docs/EVIDENCIAS_TESTES.md).
 
 ## Segurança e privacidade
 
 - O backend escuta na rede local e exige token Bearer em HTTP e WebSocket.
 - O app guarda o token cifrado com AES/GCM e chave do Android Keystore.
-- Não há câmera, permissão de câmera, upload para nuvem ou comando de shell.
-- A consulta de clima envia apenas as coordenadas do GPS do celular (ou cidade/coordenadas configuradas manualmente) ao Open-Meteo; o nome da cidade pode ser consultado no BigDataCloud. Áudio e texto da conversa não saem do PC.
-- Áudio de microfone é transmitido em tempo real, sem gravação em arquivo.
-- O backend mantém histórico de conversa apenas em memória por sessão.
-- A API usa **HTTP sem TLS** para funcionar offline em LAN. Não exponha a porta 8765 à internet.
+- Não há câmera, permissão de câmera, upload de áudio para nuvem ou shell arbitrário.
+- Conteúdo web é tratado como não confiável; URLs privadas/loopback são bloqueadas por padrão.
+- Ferramentas de arquivo são confinadas à pasta autorizada, com proteção contra `..` e links simbólicos.
+- Exclusões exigem confirmação explícita.
+- A API usa HTTP sem TLS para funcionar offline em LAN. Não exponha a porta 8765 à internet.
 - Leia [docs/SEGURANCA_E_PRIVACIDADE.md](docs/SEGURANCA_E_PRIVACIDADE.md).
 
 ## Estrutura do projeto
 
 ```text
-backend/                 FastAPI, VAD, STT, LLM, TTS, protocolo e testes
+backend/                 FastAPI, VAD, STT, LLM, TTS, ferramentas e testes
   bmo_backend/
   tests/
   config.json
@@ -247,7 +261,8 @@ assets/                  Rosto original, licença e wakeword legado
 docs/                    Instalação, protocolo, segurança, limitações e evidências
 protocol/schemas/        Esquemas JSON do protocolo bmo/1
 scripts/                 Setup, build, E2E e utilitários
-tools/                   Binári  android-app/app/build/outputs/apk/release/app-release.apkos/modelos locais (não versionados)
+tools/                   Binários/modelos locais (não versionados)
+wakeword/                Modelo acústico e modelos de mel/embedding
 ```
 
 ## Documentação
@@ -259,15 +274,12 @@ tools/                   Binári  android-app/app/build/outputs/apk/release/app-
 - [Limitações conhecidas](docs/LIMITACOES.md)
 - [Evidências de teste](docs/EVIDENCIAS_TESTES.md)
 
-## 3D 
-Tem que imprimir em escala 113% 
+## 3D
+
+Tem que imprimir em escala 113%.
 
 ## Licença e créditos
 
-<<<<<<< HEAD
 Os rostos e o arquivo legado `wakeword_hey_jarvis.onnx` vêm do projeto original `be-more-agent`. Consulte [assets/ORIGINAL_LICENSE](assets/ORIGINAL_LICENSE).
 
-O detector `saturnbmo.onnx` [nao testado] foi treinado com [livekit-wakeword](https://github.com/livekit/livekit-wakeword) e dados sintéticos; os modelos de mel e embedding acompanham o pipeline do livekit. O código deste projeto é de uso local/educacional; revise as licenças das ferramentas e modelos de terceiros (Whisper.cpp, Piper, Ollama, livekit-wakeword e modelos baixados) antes de redistribuir.
-=======
-Os rostos e o arquivo `wakeword_hey_jarvis.onnx` vêm do projeto original `be-more-agent`. Consulte [assets/ORIGINAL_LICENSE](assets/ORIGINAL_LICENSE). O código deste projeto é de uso local/educacional; revise as licenças das ferramentas e modelos de terceiros (Whisper.cpp, Piper, Ollama e modelos baixados) antes de redistribuir.
->>>>>>> 59f8aca (REVERSAO DE IMPLEMENTACAO DE WAKEWORD)
+O detector `wakeword/saturnbmo.onnx` foi treinado com [livekit-wakeword](https://github.com/livekit/livekit-wakeword); os modelos de mel e embedding acompanham o pipeline do livekit. O código deste projeto é de uso local/educacional; revise as licenças das ferramentas e modelos de terceiros (Faster-Whisper, Whisper.cpp, Piper, Ollama, BitChord, livekit-wakeword e modelos baixados) antes de redistribuir.

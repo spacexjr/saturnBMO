@@ -30,6 +30,7 @@ CLIENT_MESSAGE_TYPES = {
     "playback.started",
     "playback.done",
     "reset",
+    "confirmation",
 }
 
 AUDIO_FORMATS = {"pcm_s16le"}
@@ -79,6 +80,20 @@ def validate_text(payload: dict[str, Any], max_chars: int = 1000) -> str:
     if len(text) > max_chars:
         raise ProtocolError("text_too_long", f"O texto excede {max_chars} caracteres.")
     return text
+
+
+def validate_confirmation(payload: dict[str, Any]) -> dict[str, Any]:
+    """Valida a resposta do usuário a uma confirmação de ação destrutiva."""
+    confirmation_id = payload.get("id")
+    if not isinstance(confirmation_id, str) or not confirmation_id.strip():
+        raise ProtocolError("invalid_confirmation", "Campo 'id' obrigatório.")
+    approved = payload.get("approved")
+    if not isinstance(approved, bool):
+        raise ProtocolError(
+            "invalid_confirmation",
+            "Campo 'approved' deve ser booleano (true para confirmar).",
+        )
+    return {"id": confirmation_id.strip()[:64], "approved": approved}
 
 
 def validate_location(payload: dict[str, Any]) -> dict[str, float]:

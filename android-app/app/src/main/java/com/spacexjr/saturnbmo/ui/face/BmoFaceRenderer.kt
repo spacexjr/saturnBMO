@@ -6,9 +6,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -21,6 +24,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
@@ -37,6 +42,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.spacexjr.saturnbmo.BmoActivity
 import com.spacexjr.saturnbmo.ui.BmoGreen
 import com.spacexjr.saturnbmo.ui.BmoInk
 import com.spacexjr.saturnbmo.ui.BmoWhite
@@ -77,6 +83,7 @@ private val MagicCyan = Color(0xFF00E5FF)
 @Composable
 fun BmoFaceRenderer(
     face: ImageBitmap?,
+    cloudArt: ImageBitmap? = null,
     visual: BmoFaceVisual,
     clock: State<Long>,
     micLevel: Float,
@@ -123,7 +130,8 @@ fun BmoFaceRenderer(
                 drawEyelids(faceRect, 1f)
             }
 
-            drawTheme(visual.theme, time, faceRect, particles, micLevel)
+            drawTheme(visual.theme, time, faceRect, particles, micLevel, cloudArt)
+            drawActivity(visual.activity, time, faceRect, micLevel)
             drawEmotion(visual.emotion, visual.theme, time, faceRect, particles)
         }
 
@@ -152,6 +160,43 @@ private fun FaceReadouts(visual: BmoFaceVisual, modifier: Modifier) {
                     .align(Alignment.TopStart)
                     .padding(start = 26.dp, top = 22.dp),
             )
+        }
+
+        if (data.musicTitle != null || data.musicArtist != null) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = 26.dp, top = 20.dp),
+            ) {
+                data.musicTitle?.let { title ->
+                    PixelText(faceTrim(title, 24), 13.sp, color)
+                }
+                data.musicArtist?.let { artist ->
+                    PixelText(faceTrim(artist, 30), 9.sp, color.copy(alpha = 0.8f))
+                }
+                if (data.musicTitle != null) {
+                    PixelText(
+                        text = if (data.musicPlaying) "TOCANDO" else "PAUSADO",
+                        fontSize = 8.sp,
+                        color = color.copy(alpha = 0.7f),
+                    )
+                }
+            }
+        }
+
+        if (visual.activity != BmoActivity.NONE) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(end = 24.dp, top = 20.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Canvas(Modifier.size(16.dp)) {
+                    drawOperationIcon(visual.activity, color)
+                }
+                Spacer(Modifier.width(5.dp))
+                PixelText(visual.activity.shortLabel, 8.sp, color)
+            }
         }
 
         when (data.theme) {
@@ -246,6 +291,235 @@ private fun PixelText(
     )
 }
 
+private fun faceTrim(text: String, max: Int): String {
+    val clean = text.trim().replace(Regex("""\s+"""), " ")
+    if (clean.length <= max) return clean
+    return clean.take((max - 3).coerceAtLeast(1)).trimEnd() + "..."
+}
+
+/** Ícone 8-bit da operação, desenhado com primitivas (sem novos assets). */
+private fun DrawScope.drawOperationIcon(activity: BmoActivity, color: Color) {
+    val w = size.width
+    val h = size.height
+    when (activity) {
+        BmoActivity.SEARCHING_WEB, BmoActivity.SEARCHING_APPS,
+        BmoActivity.SEARCHING_FILES -> {
+            drawCircle(
+                color,
+                w * 0.28f,
+                Offset(w * 0.42f, h * 0.42f),
+                style = Stroke(width = w * 0.12f),
+            )
+            drawLine(
+                color,
+                Offset(w * 0.62f, h * 0.62f),
+                Offset(w * 0.92f, h * 0.92f),
+                strokeWidth = w * 0.14f,
+                cap = StrokeCap.Square,
+            )
+        }
+
+        BmoActivity.OPENING_APP, BmoActivity.CLOSING_APP -> {
+            val up = activity == BmoActivity.OPENING_APP
+            val tipY = if (up) h * 0.12f else h * 0.88f
+            val baseY = if (up) h * 0.6f else h * 0.4f
+            val wingY = if (up) h * 0.38f else h * 0.62f
+            drawLine(color, Offset(w * 0.5f, tipY), Offset(w * 0.5f, baseY), w * 0.16f, StrokeCap.Square)
+            drawLine(color, Offset(w * 0.5f, tipY), Offset(w * 0.22f, wingY), w * 0.16f, StrokeCap.Square)
+            drawLine(color, Offset(w * 0.5f, tipY), Offset(w * 0.78f, wingY), w * 0.16f, StrokeCap.Square)
+            drawRect(
+                color,
+                Offset(w * 0.2f, if (up) h * 0.8f else h * 0.12f),
+                Size(w * 0.6f, h * 0.1f),
+            )
+        }
+
+        BmoActivity.PLAYING_MUSIC -> {
+            drawOval(color, Offset(w * 0.08f, h * 0.62f), Size(w * 0.42f, h * 0.3f))
+            drawLine(color, Offset(w * 0.48f, h * 0.75f), Offset(w * 0.48f, h * 0.16f), w * 0.12f, StrokeCap.Square)
+            drawLine(color, Offset(w * 0.48f, h * 0.16f), Offset(w * 0.88f, h * 0.28f), w * 0.12f, StrokeCap.Square)
+        }
+
+        BmoActivity.READING_WEB, BmoActivity.READING_FILE -> {
+            drawRect(color, Offset(w * 0.2f, h * 0.1f), Size(w * 0.6f, h * 0.8f), style = Stroke(w * 0.1f))
+            repeat(3) { index ->
+                val y = h * (0.3f + index * 0.18f)
+                drawLine(color, Offset(w * 0.32f, y), Offset(w * 0.68f, y), w * 0.08f)
+            }
+        }
+
+        BmoActivity.CREATING_FILE, BmoActivity.EDITING_FILE -> {
+            drawLine(color, Offset(w * 0.18f, h * 0.82f), Offset(w * 0.62f, h * 0.24f), w * 0.16f, StrokeCap.Square)
+            drawRect(color, Offset(w * 0.58f, h * 0.1f), Size(w * 0.3f, h * 0.3f))
+        }
+
+        BmoActivity.CHECKING_SYSTEM -> {
+            drawCircle(color, w * 0.32f, Offset(w * 0.5f, h * 0.5f), style = Stroke(w * 0.1f))
+            repeat(4) { index ->
+                val angle = index * PI.toFloat() / 2f
+                drawLine(
+                    color,
+                    Offset(w * 0.5f + cos(angle) * w * 0.36f, h * 0.5f + sin(angle) * h * 0.36f),
+                    Offset(w * 0.5f + cos(angle) * w * 0.48f, h * 0.5f + sin(angle) * h * 0.48f),
+                    w * 0.1f,
+                )
+            }
+        }
+
+        BmoActivity.WAITING_CONFIRMATION ->
+            drawPixelText("?", w * 0.14f, h * 0.1f, pixel = w * 0.16f, color = color)
+
+        BmoActivity.SUCCESS -> {
+            drawLine(color, Offset(w * 0.14f, h * 0.55f), Offset(w * 0.42f, h * 0.82f), w * 0.15f, StrokeCap.Square)
+            drawLine(color, Offset(w * 0.42f, h * 0.82f), Offset(w * 0.88f, h * 0.18f), w * 0.15f, StrokeCap.Square)
+        }
+
+        BmoActivity.ERROR ->
+            drawPixelText("!", w * 0.3f, h * 0.1f, pixel = w * 0.18f, color = color)
+
+        BmoActivity.PROCESSING -> repeat(3) { index ->
+            drawRect(
+                color.copy(alpha = if (index == 1) 1f else 0.45f),
+                Offset(w * (0.1f + index * 0.3f), h * 0.42f),
+                Size(w * 0.2f, h * 0.2f),
+            )
+        }
+
+        else -> drawRect(color, Offset(w * 0.2f, h * 0.2f), Size(w * 0.6f, h * 0.6f))
+    }
+}
+
+/** Camada procedural que acompanha a operação real em andamento. */
+private fun DrawScope.drawActivity(
+    activity: BmoActivity,
+    time: Long,
+    faceRect: Rect,
+    micLevel: Float,
+) {
+    when (activity) {
+        BmoActivity.SEARCHING_WEB, BmoActivity.SEARCHING_APPS,
+        BmoActivity.SEARCHING_FILES -> {
+            val progress = (time / 1200f) % 1f
+            val y = faceRect.top + faceRect.height * (0.12f + progress * 0.76f)
+            drawLine(
+                BmoInk.copy(alpha = 0.2f),
+                Offset(faceRect.left + faceRect.width * 0.04f, y),
+                Offset(faceRect.right - faceRect.width * 0.04f, y),
+                strokeWidth = 3f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 9f)),
+            )
+        }
+
+        BmoActivity.OPENING_APP, BmoActivity.CLOSING_APP -> {
+            val up = activity == BmoActivity.OPENING_APP
+            repeat(3) { index ->
+                val phase = ((time / 420f + index * 0.25f) % 1f)
+                val y = faceRect.top + faceRect.height *
+                    (if (up) 0.86f - phase * 0.5f else 0.24f + phase * 0.5f)
+                val x = faceRect.left + faceRect.width * (0.12f + index * 0.07f)
+                val alpha = 0.28f * (1f - phase)
+                val wing = if (up) 10f else -10f
+                drawLine(
+                    BmoInk.copy(alpha = alpha),
+                    Offset(x - 8f, y + wing),
+                    Offset(x, y),
+                    3f,
+                    StrokeCap.Square,
+                )
+                drawLine(
+                    BmoInk.copy(alpha = alpha),
+                    Offset(x, y),
+                    Offset(x + 8f, y + wing),
+                    3f,
+                    StrokeCap.Square,
+                )
+            }
+        }
+
+        BmoActivity.READING_WEB, BmoActivity.READING_FILE -> {
+            repeat(4) { index ->
+                val y = faceRect.top + faceRect.height * (0.2f + index * 0.1f)
+                val width = faceRect.width * (0.25f + 0.08f * ((time / 280L + index) % 4L))
+                drawLine(
+                    BmoInk.copy(alpha = 0.16f),
+                    Offset(faceRect.left + faceRect.width * 0.06f, y),
+                    Offset(faceRect.left + faceRect.width * 0.06f + width, y),
+                    strokeWidth = 3f,
+                )
+            }
+        }
+
+        BmoActivity.CREATING_FILE, BmoActivity.EDITING_FILE -> {
+            val phase = ((time / 260f) % 1f)
+            listOf(0.08f, 0.92f).forEachIndexed { index, fx ->
+                val y = faceRect.top + faceRect.height * (0.2f + phase * 0.6f)
+                drawRect(
+                    BmoInk.copy(alpha = 0.2f * (1f - phase)),
+                    Offset(faceRect.left + faceRect.width * fx, y),
+                    Size(10f + index * 3f, 10f + index * 3f),
+                )
+            }
+        }
+
+        BmoActivity.WAITING_CONFIRMATION -> {
+            val pulse = 0.5f + 0.5f * sin(time / 260f)
+            drawRect(
+                BmoInk.copy(alpha = 0.1f + 0.18f * pulse),
+                Offset(faceRect.left + faceRect.width * 0.04f, faceRect.top + faceRect.height * 0.06f),
+                Size(faceRect.width * 0.92f, faceRect.height * 0.88f),
+                style = Stroke(width = 4f),
+            )
+        }
+
+        BmoActivity.SUCCESS -> {
+            val pulse = 0.5f + 0.5f * sin(time / 220f)
+            drawPixelText(
+                "OK",
+                faceRect.left + faceRect.width * 0.5f,
+                faceRect.top + faceRect.height * 0.76f,
+                pixel = 4f + pulse * 2f,
+                color = BmoInk.copy(alpha = 0.32f),
+            )
+        }
+
+        BmoActivity.CHECKING_SYSTEM -> {
+            val angle = time * 0.0022f
+            val cx = faceRect.left + faceRect.width * 0.5f
+            val cy = faceRect.top + faceRect.height * 0.5f
+            val radius = faceRect.width * (0.3f + 0.03f * sin(time / 300f))
+            drawCircle(
+                BmoInk.copy(alpha = 0.18f),
+                radius,
+                Offset(cx, cy),
+                style = Stroke(width = 3f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), angle)),
+            )
+        }
+
+        BmoActivity.PROCESSING -> {
+            val active = ((time / 300L) % 4L).toInt()
+            repeat(4) { index ->
+                drawRect(
+                    if (index == active) BmoInk.copy(alpha = 0.4f) else BmoInk.copy(alpha = 0.14f),
+                    Offset(faceRect.left + faceRect.width * 0.08f + index * 14f, faceRect.top + faceRect.height * 0.1f),
+                    Size(9f, 9f),
+                )
+            }
+        }
+
+        BmoActivity.PLAYING_MUSIC -> if (micLevel <= 0.02f) {
+            val pulse = 0.5f + 0.5f * sin(time / 260f)
+            drawCircle(
+                BmoInk.copy(alpha = 0.12f + 0.1f * pulse),
+                faceRect.width * 0.06f,
+                Offset(faceRect.left + faceRect.width * 0.8f, faceRect.top + faceRect.height * 0.62f),
+                style = Stroke(width = 3f),
+            )
+        }
+
+        else -> Unit
+    }
+}
+
 // ----------------------------------------------------------------------------
 // Temas
 // ----------------------------------------------------------------------------
@@ -256,13 +530,14 @@ private fun DrawScope.drawTheme(
     faceRect: Rect,
     particles: SceneParticles,
     micLevel: Float,
+    cloudArt: ImageBitmap?,
 ) {
     when (theme) {
         BmoFaceTheme.NONE -> Unit
         BmoFaceTheme.SUNNY -> drawSunny(time)
-        BmoFaceTheme.CLOUDY -> drawCloudy(time, particles)
+        BmoFaceTheme.CLOUDY -> drawCloudy(time, particles, cloudArt)
         BmoFaceTheme.RAINY -> drawRainy(time, particles)
-        BmoFaceTheme.STORM -> drawStorm(time, particles)
+        BmoFaceTheme.STORM -> drawStorm(time, particles, cloudArt)
         BmoFaceTheme.SNOWY -> drawSnowy(time, particles)
         BmoFaceTheme.HOT -> drawHot(time, particles)
         BmoFaceTheme.COLD -> drawCold(time, particles)
@@ -309,8 +584,36 @@ private fun DrawScope.drawSunny(time: Long) {
     )
 }
 
-private fun DrawScope.drawCloudy(time: Long, particles: SceneParticles) {
+private fun DrawScope.drawCloudy(
+    time: Long,
+    particles: SceneParticles,
+    cloudArt: ImageBitmap?,
+) {
     drawRect(Color(0xFF90A4AE).copy(alpha = 0.05f))
+    if (cloudArt != null) {
+        // Arte fornecida (assets/faces/clouds.png) em camadas que derivam
+        // lentamente pelas bordas, deixando o rosto do BMO livre no centro.
+        val scales = floatArrayOf(0.32f, 0.20f, 0.26f, 0.16f)
+        val heights = floatArrayOf(-0.22f, -0.10f, 0.62f, 0.76f)
+        val speeds = floatArrayOf(0.000012f, 0.000020f, 0.000009f, 0.000024f)
+        val alphas = floatArrayOf(0.55f, 0.65f, 0.55f, 0.62f)
+        repeat(4) { index ->
+            val dstWidth = size.width * scales[index]
+            val dstHeight = dstWidth * cloudArt.height / cloudArt.width
+            val travel = size.width + dstWidth * 2f
+            val x = ((index * size.width * 0.31f + time * speeds[index] * travel) % travel) - dstWidth
+            drawImage(
+                image = cloudArt,
+                srcOffset = IntOffset.Zero,
+                srcSize = IntSize(cloudArt.width, cloudArt.height),
+                dstOffset = IntOffset(x.roundToInt(), (size.height * heights[index]).roundToInt()),
+                dstSize = IntSize(dstWidth.roundToInt(), dstHeight.roundToInt()),
+                alpha = alphas[index],
+                filterQuality = FilterQuality.Medium,
+            )
+        }
+        return
+    }
     particles.primary.forEachIndexed { index, particle ->
         val scale = 0.8f + particle.size * 0.12f
         val cloudWidth = size.width * 0.2f * scale
@@ -365,7 +668,11 @@ private fun DrawScope.drawRainRipples(time: Long) {
     }
 }
 
-private fun DrawScope.drawStorm(time: Long, particles: SceneParticles) {
+private fun DrawScope.drawStorm(
+    time: Long,
+    particles: SceneParticles,
+    cloudArt: ImageBitmap?,
+) {
     drawRect(StormDark.copy(alpha = 0.24f))
     particles.primary.forEach { drop ->
         val speed = size.height * (0.5f + drop.speed * 2.6f)
@@ -379,14 +686,39 @@ private fun DrawScope.drawStorm(time: Long, particles: SceneParticles) {
             cap = StrokeCap.Square,
         )
     }
-    val cloudShift = (time * 0.00004f * size.width) % (size.width * 0.4f)
-    repeat(4) { index ->
-        drawCloud(
-            x = index * size.width * 0.3f - cloudShift,
-            y = size.height * (0.06f + index % 2 * 0.08f),
-            scale = 1.8f,
-            color = Color(0xFF37474F).copy(alpha = 0.88f),
-        )
+    if (cloudArt != null) {
+        // Arte fornecida (assets/faces/clouds.png) apenas no tema de tempestade,
+        // escurecida e concentrada no topo para não cobrir o rosto.
+        val scales = floatArrayOf(0.40f, 0.26f, 0.30f)
+        val heights = floatArrayOf(-0.24f, -0.12f, -0.18f)
+        val speeds = floatArrayOf(0.000008f, 0.000012f, 0.000006f)
+        val alphas = floatArrayOf(0.92f, 0.82f, 0.88f)
+        repeat(3) { index ->
+            val dstWidth = size.width * scales[index]
+            val dstHeight = dstWidth * cloudArt.height / cloudArt.width
+            val travel = size.width + dstWidth * 2f
+            val x = ((index * size.width * 0.37f + time * speeds[index] * travel) % travel) - dstWidth
+            drawImage(
+                image = cloudArt,
+                srcOffset = IntOffset.Zero,
+                srcSize = IntSize(cloudArt.width, cloudArt.height),
+                dstOffset = IntOffset(x.roundToInt(), (size.height * heights[index]).roundToInt()),
+                dstSize = IntSize(dstWidth.roundToInt(), dstHeight.roundToInt()),
+                alpha = alphas[index],
+                colorFilter = ColorFilter.tint(Color(0xFF35434C), BlendMode.Modulate),
+                filterQuality = FilterQuality.Medium,
+            )
+        }
+    } else {
+        val cloudShift = (time * 0.00004f * size.width) % (size.width * 0.4f)
+        repeat(4) { index ->
+            drawCloud(
+                x = index * size.width * 0.3f - cloudShift,
+                y = size.height * (0.06f + index % 2 * 0.08f),
+                scale = 1.8f,
+                color = Color(0xFF37474F).copy(alpha = 0.88f),
+            )
+        }
     }
     drawLightning(time)
 }

@@ -1,6 +1,43 @@
 # Evidências de teste
 
-Registro do que foi realmente executado. Datas no fuso local (America/Sao_Paulo), em **2026-10-28**.
+Registro do que foi realmente executado. As seções históricas abaixo são de **2026-10-28**; a atualização de **2026-11-08** registra o estado atual (Faster-Whisper, ferramentas e testes novos).
+
+## Atualização 2026-11-08
+
+### Testes automatizados
+
+```text
+backend: 76 passed
+android: 17 testes unitários (3 AppSettings + 9 FaceClassifier + 5 ActivityFace)
+```
+
+O backend agora cobre também `files`, `web`, `tools_services` e `acoustic_wakeword`, além do fluxo de confirmação no WebSocket.
+
+### Testes reais executados
+
+- Backend real + Ollama: resposta HTTP por texto.
+- WebSocket real: evento `music_status` via BitChord (`player=bitchord`, `is_bitchord=true`, `status=paused`, título `EXPANSÃO DE DOMÍNIO`, artista `M4rkim`, volume `0.53`, `search=false`).
+- WebSocket real: `web_search` e `create_file` na pasta autorizada.
+- WebSocket real: `delete_file` com `confirmation.request`, confirmação e remoção efetiva do arquivo, emitindo `confirmation.result`.
+- Piper real com `pt_BR-faber-medium` (22.050 Hz) e Faster-Whisper real (`medium`, `int8`, `pt`) com áudio sintético.
+  - Modelo `medium` baixado no primeiro uso (~146 s incluindo download).
+  - Carregamento do modelo em processo novo: ~9,8 s; inferência quente de 1,7 s de áudio: **~3,4 s** em CPU.
+  - Transcrição obtida: `"Olá Bumol, que horas são agora?"` (o “BMO” sintético ainda sai distorcido; a ativação usa o detector acústico, não essa transcrição).
+- Detector acústico carregado de `wakeword/`; áudio sintético “Ei BMO” ficou abaixo do limiar. **Ainda não há teste com voz humana real.**
+- Backend reiniciado com `stt.model=medium` confirmado em `/api/v1/info` (`active_engine=faster-whisper`), após corrigir `BMO_STT_MODEL` antigo em `backend/.env`.
+- WebSocket real (texto): “retome a música” executou `music_control`, emitiu evento `music` com `status=playing` e o BitChord saiu de `paused` para `playing`.
+- WebSocket real (áudio sintético): o Faster-Whisper `medium` carregou e transcreveu, mas a voz do Piper distorceu “Ei BMO”/“retome a música”; a wake word não foi detectada nesse áudio sintético (limitação já registrada).
+- App Android: polling de `/api/v1/media` a cada 4 s e mensagens amigáveis para fechamento 4401/4400 implementados; build e 17 testes passando.
+- Faces CLOUDY e STORM validadas no emulador Android (Medium_Phone): arte `clouds.png` carregada dos assets, nuvens claras e lentas no tema nublado e nuvens escuras no tema de tempestade (com chuva/raio), sempre com o rosto visível; “tempo” e “tempestade” ativaram os temas via classificador real.
+
+### O que continua pendente
+
+- Validação de “Ei, BMO” com voz humana ao vivo.
+- Teste de controle de janelas em KDE/Wayland real.
+- Teste do seletor de pastas no PC com `kdialog` e `zenity`.
+- Teste do APK atual no Galaxy A22.
+
+As seções a seguir preservam o registro histórico original.
 
 ## Ambiente
 

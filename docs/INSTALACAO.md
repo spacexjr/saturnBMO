@@ -1,6 +1,6 @@
 # Instalação
 
-Este guia monta o backend local no PC e o app Android. O projeto foi testado em **Fedora 44**, **Python 3.14**, **JDK 25**, **Gradle 9.3**, **Android SDK 36** e em um **Xiaomi 2412DPC0AI real com Android 17**. Outras distribuições e versões compatíveis devem funcionar, mas os comandos de instalação de pacotes variam.
+Este guia monta o backend local no PC e o app Android. O projeto foi desenvolvido e testado em **Fedora/Nobara**, **Python 3.12**, **JDK 21**, **Gradle 9.3** e **Android SDK 36**. Outras distribuições e versões compatíveis devem funcionar; os comandos de instalação de pacotes variam.
 
 ## 1. Visão geral
 
@@ -9,31 +9,27 @@ Você precisa de:
 1. PC e celular na mesma rede local (Wi-Fi ou Ethernet).
 2. Backend Python rodando no PC.
 3. Ollama com um modelo local.
-4. Whisper.cpp com modelo de reconhecimento de fala.
+4. Faster-Whisper (instalado pelo `requirements.txt`; modelo baixado no primeiro uso).
 5. Piper com voz pt-BR **ou** espeak-ng como fallback.
-6. APK instalado no celular.
-7. Internet no PC apenas para a consulta de clima (opcional).
+6. `playerctl`/`busctl` para MPRIS (BitChord) e `kdialog`/`zenity` para o seletor de pastas.
+7. APK instalado no celular.
+8. Internet no PC para as ferramentas web e clima (opcional para conversa local).
 
-O celular não precisa de internet, apenas de acesso ao PC.
+O celular não precisa de internet, apenas de acesso ao PC. O celular também não executa STT nem LLM.
 
 ## 2. Pacotes do sistema
 
-### Fedora
+### Fedora / Nobara
 
 ```bash
 sudo dnf install python3 python3-pip python3-virtualenv ffmpeg espeak-ng \
-  cmake gcc-c++ make git java-17-openjdk-devel android-tools
+  cmake gcc-c++ make git java-21-openjdk-devel android-tools \
+  playerctl kdialog zenity
 ```
 
-Se for usar a versão do JDK já instalada (testado com JDK 25), mantenha-a. O projeto exige Java 17+.
+Ubuntu/Debian usam `playerctl`, `kdialog` (ou `zenity`), `openjdk-17-jdk`/`openjdk-21-jdk` e `adb`.
 
-### Ubuntu/Debian
-
-```bash
-sudo apt update
-sudo apt install python3 python3-venv python3-pip ffmpeg espeak-ng \
-  cmake build-essential git openjdk-17-jdk adb
-```
+O build do Android exige um **JDK com `javac`**, não apenas um JRE. Se o `java` padrão do sistema não tiver compilador, aponte `JAVA_HOME` para um JDK 17 ou 21.
 
 ### Android SDK
 
@@ -65,7 +61,7 @@ O script:
 - cria `backend/.venv`;
 - instala `backend/requirements.txt` e `backend/requirements-dev.txt`;
 - cria `backend/data/token` se ainda não existir;
-- verifica os caminhos de Whisper, Piper, espeak-ng e Ollama;
+- verifica Piper, Faster-Whisper, espeak-ng, playerctl, kdialog/zenity e Ollama;
 - lista o que estiver faltando.
 
 Para executar manualmente:
@@ -78,63 +74,67 @@ python3 -m venv .venv
 .venv/bin/python -m bmo_backend --print-token
 ```
 
+As dependências principais incluem `faster-whisper`, `onnxruntime`, `numpy`, `httpx`, `fastapi` e `uvicorn`.
+
 ## 4. Ollama e modelo de linguagem
 
-Instale o Ollama pelo site oficial e baixe um modelo. O padrão do projeto é:
+Instale o Ollama pelo site oficial e baixe um modelo. O padrão do repositório é:
 
 ```bash
-ollama pull qwen3.5:2b
+ollama pull qwen3:8b
 ollama list
 ```
 
-O Ollama deve escutar em `127.0.0.1:11434` (padrão). O backend acessa essa URL.
-
-Para usar outro modelo, edite `backend/config.json`:
+O Ollama deve escutar em `127.0.0.1:11434` (padrão). Para usar outro modelo, edite `backend/config.json`:
 
 ```json
 "llm": {
-  "model": "gemma3:1b"
+  "model": "qwen3:8b"
 }
 ```
 
 Ou use a variável de ambiente:
 
 ```bash
-export BMO_LLM_MODEL=gemma3:1b
+export BMO_LLM_MODEL=outro-modelo
 ```
 
-Modelos menores respondem mais rápido, mas erram mais. O teste registrado usou `qwen3.5:2b`.
+Se o modelo padrão não existir no seu PC, escolha um de `ollama list`; caso contrário o backend responde que o LLM está indisponível. Modelos menores respondem mais rápido, mas erram mais.
 
-## 5. Whisper.cpp
+## 5. Faster-Whisper (STT principal)
 
-O backend chama o binário `whisper-cli` e um modelo `.bin`.
+O Faster-Whisper é instalado por `backend/requirements.txt`. O modelo é baixado/carregado na primeira transcrição. Configuração padrão:
 
-Caminhos esperados por padrão:
+```json
+"stt": {
+  "engine": "faster_whisper",
+  "model": "medium",
+  "device": "cpu",
+  "compute_type": "int8",
+  "language": "pt",
+  "beam_size": 5,
+  "num_workers": 1,
+  "vad_filter": true
+}
+```
+
+- `model`: `tiny`, `base`, `small`, `medium`, `large-v3` etc.
+- `compute_type`: `int8` é o mais leve em CPU; `float16` exige GPU compatível.
+- `beam_size`: maior tende a melhorar a precisão e aumentar a latência.
+- `language`: `pt` para português.
+
+Se o modelo não baixar, verifique a conexão do PC ou baixe manualmente um modelo do projeto Faster-Whisper/Systran e ajuste o caminho em `stt.model`.
+
+### Fallback whisper.cpp (opcional)
+
+O projeto mantém suporte a `whisper.cpp` como fallback. Ele **não** é obrigatório e o binário pode estar ausente. Para ativá-lo, compile e coloque:
 
 ```text
 tools/whisper.cpp/build/bin/whisper-cli
 tools/whisper-models/ggml-base.bin
 ```
 
-Compilação resumida:
-
-```bash
-git clone https://github.com/ggml-org/whisper.cpp tools/whisper.cpp
-cmake -S tools/whisper.cpp -B tools/whisper.cpp/build -DCMAKE_BUILD_TYPE=Release
-cmake --build tools/whisper.cpp/build -j"$(nproc)"
-mkdir -p tools/whisper-models
-curl -L -o tools/whisper-models/ggml-base.bin \
-  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
-```
-
-Se os caminhos forem diferentes, ajuste `backend/config.json` em `stt.binary` e `stt.model`, ou use:
-
-```bash
-export BMO_STT_BINARY=/caminho/para/whisper-cli
-export BMO_STT_MODEL=/caminho/para/ggml-base.bin
-```
-
-O modelo `base` foi usado nos testes. Modelos maiores tendem a transcrever melhor, mas consomem mais CPU/RAM.
+E ajuste `stt.fallback` em `backend/config.json`. Sem esses arquivos, o backend continua usando Faster-Whisper.
 
 ## 6. Piper e voz pt-BR
 
@@ -166,9 +166,7 @@ Se o Piper não estiver disponível, o backend tenta o **espeak-ng** com voz `pt
 espeak-ng -v pt-br -w /tmp/bmo-teste-espeak.wav "Olá, eu sou o BMO."
 ```
 
-O Piper é preferido por ter voz mais natural. O fallback por espeak-ng mantém o app funcional.
-
-Para trocar o motor:
+Para forçar o motor:
 
 ```json
 "tts": {
@@ -199,15 +197,62 @@ O arquivo tem permissão `600` quando possível. Também é possível definir o 
 export BMO_TOKEN="um-token-longo-e-aleatorio"
 ```
 
-O app guarda o token cifrado com Android Keystore. O token não deve ser colocado em prints, issues ou repositórios.
+O app guarda o token cifrado com Android Keystore. Não coloque o token em prints, issues ou repositórios.
 
-## 8. Clima e previsão do tempo
+## 8. Ferramentas do PC
 
-O BMO consulta temperatura e previsão de chuva pela internet usando o **Open-Meteo**, sem chave de API. A localização vem do **GPS do celular** (ou da rede Wi-Fi/celular), enviada pelo app ao backend como latitude e longitude. O áudio e o texto da conversa não são enviados: apenas as coordenadas.
+### Dependências
+
+```bash
+command -v playerctl
+command -v busctl
+command -v kdialog || command -v zenity
+```
+
+- `playerctl` e `busctl` são usados para MPRIS (BitChord e outros players).
+- `kdialog` (KDE) ou `zenity` abre o seletor nativo de pastas.
+- O seletor precisa de uma sessão gráfica (`DISPLAY` ou `WAYLAND_DISPLAY`).
+
+### BitChord 1.8
+
+Abra o BitChord normalmente. O backend descobre o serviço `org.mpris.MediaPlayer2.bitchord` no barramento do usuário. Não é necessário instalar outro BitChord nem modificar o programa.
+
+Funcionalidades disponíveis por MPRIS: play, pause, alternar, próxima, anterior, parar e volume. **Pesquisar faixas por voz não é exposto pelo BitChord 1.8**; o BMO informa essa limitação.
+
+Teste manual:
+
+```bash
+playerctl -p bitchord status
+playerctl -p bitchord metadata
+```
+
+### Pasta autorizada
+
+A autorização é feita pelo app: **Ajustes → Pasta de acesso do BMO → Escolher pasta no PC**. O seletor abre no PC e a escolha é salva em `backend/data/access.json`. Também é possível autorizar por HTTP:
+
+```bash
+curl -X POST http://127.0.0.1:8765/api/v1/folder \
+  -H "Authorization: Bearer $(cat backend/data/token)" \
+  -H "Content-Type: application/json" \
+  -d '{"path":"/home/SEU_USUARIO/Documentos/BMO"}'
+```
+
+Revogar:
+
+```bash
+curl -X POST http://127.0.0.1:8765/api/v1/folder/revoke \
+  -H "Authorization: Bearer $(cat backend/data/token)"
+```
+
+Todas as ferramentas de arquivo ficam confinadas a essa pasta. Exclusões exigem confirmação.
+
+## 9. Clima e previsão do tempo
+
+O BMO consulta temperatura e previsão de chuva pela internet usando o **Open-Meteo**, sem chave de API. A localização vem do **GPS do celular** (ou da rede Wi-Fi/celular), enviada pelo app ao backend como latitude e longitude. Apenas as coordenadas são enviadas; áudio e texto não saem do PC.
 
 Na primeira conexão, o app pede a permissão de localização. Também é possível autorizar depois em **Ajustes → Localização (clima)**. Se a permissão for negada, o backend responde pedindo para ativar o GPS; não há cidade padrão nem estimativa por IP.
 
-A cidade no `config.json` é apenas uma alternativa manual. Para usar o GPS, deixe os campos vazios:
+A cidade no `config.json` é uma alternativa manual:
 
 ```json
 "weather": {
@@ -225,15 +270,9 @@ A cidade no `config.json` é apenas uma alternativa manual. Para usar o GPS, dei
 - `latitude`/`longitude`: alternativa manual quando o app não envia coordenadas; use os dois juntos.
 - `cache_ttl_s`: tempo em segundos para reaproveitar a previsão (padrão 600 = 10 min).
 
-Também é possível configurar uma cidade manual por ambiente:
+O PC precisa de saída HTTPS para `api.open-meteo.com`. O nome da cidade é obtido com `api.bigdatacloud.net`; se esse serviço falhar, a resposta usa “sua localização”. Perguntas como “vai chover hoje?”, “qual a temperatura?” e “como está o tempo amanhã?” são respondidas localmente, sem passar pelo LLM, e faladas pelo TTS.
 
-```bash
-export BMO_WEATHER_LOCATION="São Paulo"
-```
-
-O PC precisa de saída HTTPS para `api.open-meteo.com`. O nome da cidade é obtido com `api.bigdatacloud.net`; se esse serviço falhar, a resposta usa “sua localização” e a previsão continua funcionando. Perguntas como “vai chover hoje?”, “qual a temperatura?” e “como está o tempo amanhã?” são respondidas localmente, sem passar pelo LLM, e faladas pelo TTS.
-
-## 9. Iniciar o backend
+## 10. Iniciar o backend
 
 ```bash
 ./backend/run.sh
@@ -272,7 +311,7 @@ sudo ufw allow 8766/udp
 
 Não faça port forwarding no roteador. O serviço é para LAN, sem TLS.
 
-## 10. Build do app Android
+## 11. Build do app Android
 
 ### Debug
 
@@ -291,7 +330,7 @@ adb install -r android-app/app/build/outputs/apk/release/app-release.apk
 
 O APK release usa o applicationId `com.spacexjr.saturnbmo`; o debug usa `com.spacexjr.saturnbmo.debug`. Os dois podem ficar instalados ao mesmo tempo.
 
-## 11. Conectar o app
+## 12. Conectar o app
 
 ### Pela rede Wi-Fi (uso normal)
 
@@ -306,7 +345,8 @@ O APK release usa o applicationId `com.spacexjr.saturnbmo`; o debug usa `com.spa
 4. Informe o IP, a porta `8765` e o token.
 5. Toque em **Testar** e confira LLM/STT/TTS.
 6. Toque em **Salvar e conectar**.
-7. Autorize a localização quando o app pedir (ou em **Ajustes → Localização (clima)**). O clima não usa cidade padrão.
+7. Autorize a localização quando o app pedir (opcional).
+8. Em **Ajustes → Pasta de acesso do BMO**, escolha a pasta no PC.
 
 Se a rede tiver isolamento de clientes (AP isolation) ou firewall bloqueando, o celular não verá o PC. Veja [SOLUCAO_DE_PROBLEMAS.md](SOLUCAO_DE_PROBLEMAS.md).
 
@@ -321,7 +361,7 @@ adb shell am start -n com.spacexjr.saturnbmo.debug/com.spacexjr.saturnbmo.MainAc
 
 O `adb reverse` encaminha a porta do celular para o PC via USB. Não é o modo de uso final.
 
-## 12. Testes de áudio
+## 13. Testes de áudio
 
 No app, em **Ajustes → Áudio**:
 
@@ -330,17 +370,17 @@ No app, em **Ajustes → Áudio**:
 
 O teste de microfone é local: o áudio não é enviado ao PC nem gravado.
 
-## 13. Serviço em segundo plano
+## 14. Serviço em segundo plano
 
 Ative **Escuta com tela desligada** em Ajustes. O Android mostra uma notificação persistente “BMO — Microfone ativo”. Com a tela apagada, o serviço mantém o microfone e a conexão.
 
 Observações:
 
 - O Android pode exigir permissão de notificações (Android 13+).
-- Fabricantes como Xiaomi podem encerrar serviços em segundo plano; permita o app na lista de exceções de bateria.
+- Fabricantes como Xiaomi e Samsung podem encerrar serviços em segundo plano; permita o app na lista de exceções de bateria.
 - Se o microfone for pausado, o serviço encerra depois de alguns segundos.
 
-## 14. Verificação final
+## 15. Verificação final
 
 ```bash
 # Backend
@@ -355,3 +395,5 @@ cd ../android-app && ./gradlew assembleDebug
 # APK release
 cd .. && ./scripts/build_android.sh release
 ```
+
+Consulte também [LIMITACOES.md](LIMITACOES.md) antes de considerar a instalação validada com voz humana real.

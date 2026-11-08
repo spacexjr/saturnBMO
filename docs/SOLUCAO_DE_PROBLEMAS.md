@@ -118,14 +118,17 @@ adb logcat -s BmoEngine BmoClient BmoAudio BmoPlayer
 
 ## O BMO não ouve “Ei, BMO”
 
-A detecção é por transcrição, não por modelo acústico. Se o Whisper não transcrever a frase, o backend não detecta.
+O modo padrão é híbrido: classificador acústico + transcrição. Se um dos dois falhar, o outro ainda pode ativar.
 
 - Fale perto do microfone e sem ruído.
 - Diga “Ei, BMO” de forma clara.
 - Confira o log de STT no app.
 - Use **Falar agora** para ativar sem a palavra de ativação.
 - Ajuste `vad_min_rms` em `backend/config.json` se o ambiente for barulhento.
-- Consulte [LIMITACOES.md](LIMITACOES.md).
+- Verifique se os modelos existem: `wakeword/saturnbmo.onnx`, `wakeword/melspectrogram.onnx` e `wakeword/embedding_model.onnx`.
+- Para testar só a transcrição, use `BMO_WAKEWORD_MODE=transcript`.
+- Para testar só o acústico, use `BMO_WAKEWORD_MODE=acoustic`.
+- O limiar fica em `wakeword.threshold` (padrão `0.75`). O modelo acústico ainda não foi validado com voz humana real; consulte [LIMITACOES.md](LIMITACOES.md).
 
 ## O BMO responde em texto, mas não fala
 
@@ -162,28 +165,88 @@ curl http://127.0.0.1:11434/api/tags
 
 ## O STT não funciona
 
+O motor principal é o **Faster-Whisper**, instalado no `backend/.venv`.
+
 ```bash
-ls -l tools/whisper.cpp/build/bin/whisper-cli
-ls -l tools/whisper-models/ggml-base.bin
+cd backend
+.venv/bin/python -c "import faster_whisper; print(faster_whisper.__version__)"
 ```
 
-- O binário precisa ser executável.
-- O modelo precisa existir no caminho configurado.
-- Teste manualmente com um WAV (o `LD_LIBRARY_PATH` garante que as bibliotecas
-  `.so` sejam encontradas mesmo se o projeto for movido ou renomeado):
+- Confira no app se STT aparece `ok` em **Ajustes → Estado do servidor**.
+- O modelo (`medium` por padrão) é baixado no primeiro uso; aguarde a conclusão.
+- Se o download falhar, veja a conexão do PC ou ajuste `stt.model` para um modelo já baixado.
+- Em CPU, use `compute_type: int8`. `float16` pode falhar sem GPU compatível.
+- Verifique o log em `backend/data/bmo-backend.log`.
+- Se o log mostrar `Carregando Faster-Whisper ../tools/whisper-models/ggml-base.bin`, há um `BMO_STT_MODEL` antigo em `backend/.env` sobrescrevendo o `config.json` (o `run.sh` carrega esse arquivo). Deixe `BMO_STT_MODEL=` em branco ou use `medium`/`small`.
+- Para testar o fallback whisper.cpp, confira `tools/whisper.cpp/build/bin/whisper-cli` e `tools/whisper-models/ggml-base.bin`. Ele é opcional; sem esses arquivos, o Faster-Whisper continua funcionando.
+
+## A música não atualiza ou não despausa
+
+- O app consulta `/api/v1/media` a cada **4 s** enquanto está conectado; não é preciso pedir “qual música está tocando”.
+- Ações em português como `despausar`, `retomar`, `tocar`, `pausar`, `próxima` e `anterior` são aceitas. Se o player só implementar `PlayPause`, o backend usa esse método como fallback seguro.
+- **Pesquisar e tocar uma faixa por nome não é possível** no BitChord 1.8 via MPRIS: a capacidade `search` é `false`. O BMO informa essa limitação; abra o BitChord e escolha a faixa manualmente.
+
+## As ferramentas não abrem aplicativos / janelas
+
+- Confirme que `tools.enabled` é `true` em `backend/config.json`.
+- Verifique se o backend está rodando na mesma sessão gráfica do usuário (KDE).
+- Em **Wayland**, alguns compositores não permitem fechar/minimizar janelas de outros apps. Abrir e listar costuma funcionar; foco e fechamento podem ser limitados.
+- Teste manualmente:
 
   ```bash
-  LD_LIBRARY_PATH="$PWD/tools/whisper.cpp/build/bin" \
-  tools/whisper.cpp/build/bin/whisper-cli \
-    -m tools/whisper-models/ggml-base.bin \
-    -f /caminho/audio.wav -l pt -otxt -of /tmp/transcricao
-  cat /tmp/transcricao.txt
+  which kdotool ydotool wmctrl xdotool 2>/dev/null
+  ls /usr/share/applications ~/.local/share/applications | head
   ```
 
-- Se aparecer `libwhisper.so.1: cannot open shared object file`, o `RUNPATH`
-  gravado no `whisper-cli` ainda aponta para o caminho antigo do projeto.
-  O backend já contorna isso automaticamente; para uso manual, mantenha o
-  `LD_LIBRARY_PATH` acima ou recompile o whisper.cpp no caminho atual.
+- O BMO não usa shell arbitrário; ele só usa os mecanismos suportados pelo ambiente.
+- Consulte `GET /api/v1/tools` com o token para ver o que está registrado.
+
+## O BitChord não responde
+
+- Abra o BitChord antes de pedir música.
+- Teste o MPRIS:
+
+  ```bash
+  playerctl -l
+  playerctl -p bitchord status
+  playerctl -p bitchord metadata
+  busctl --user list | grep mpris
+  ```
+
+- O serviço esperado é `org.mpris.MediaPlayer2.bitchord`.
+- O backend não instala nem modifica o BitChord.
+- Play, pause, próxima, anterior, parar e volume funcionam por MPRIS.
+- **Pesquisar faixas por voz não é suportado** pelo BitChord 1.8; o BMO deve informar essa limitação em vez de fingir que tocou.
+- Se `playerctl` não existir, instale-o.
+
+## A pasta de acesso não abre
+
+- O seletor roda no **PC**, não no celular.
+- Confirme uma sessão gráfica:
+
+  ```bash
+  echo "$DISPLAY / $WAYLAND_DISPLAY"
+  ```
+
+- Instale `kdialog` (KDE) ou `zenity`.
+- Teste:
+
+  ```bash
+  kdialog --title "Teste" --getexistingdirectory "$HOME"
+  # ou
+  zenity --file-selection --directory
+  ```
+
+- O app mostra o caminho, o sistema e a data da autorização. Use **Revogar** para remover o acesso.
+- Sem pasta autorizada, qualquer ferramenta de arquivo retorna erro de permissão.
+
+## A exclusão de arquivo não acontece
+
+- É intencional: exclusões exigem confirmação.
+- No app, responda **Confirmar** no diálogo; por voz/texto, diga “sim” ou “não”.
+- Se você mudou de assunto, a confirmação é abandonada e nada é excluído.
+- Confira `confirmation.request`/`confirmation.result` nos logs.
+- O arquivo precisa estar dentro da pasta autorizada.
 
 ## O serviço em segundo plano para sozinho
 

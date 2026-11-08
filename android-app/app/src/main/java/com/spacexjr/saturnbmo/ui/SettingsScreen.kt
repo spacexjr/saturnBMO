@@ -31,6 +31,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -84,6 +85,13 @@ fun SettingsScreen(
     var found by remember { mutableStateOf<List<ServerDiscovery.FoundServer>>(emptyList()) }
     var showFound by remember { mutableStateOf(false) }
     var locationGranted by remember { mutableStateOf(engine.hasLocationPermission()) }
+    var folderBusy by remember { mutableStateOf(false) }
+    var folderError by remember { mutableStateOf<String?>(null) }
+    var folderNotice by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(ui.connected) {
+        if (ui.connected) engine.refreshFolderStatus()
+    }
 
     val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) engine.startMicTest() else formError = "Permissão de microfone negada."
@@ -321,6 +329,98 @@ fun SettingsScreen(
             }
             Text(
                 "Coordenada aproximada por GPS ou Wi-Fi. Não há histórico de localização no app.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = BmoInkSoft,
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+        SectionCard(title = "Pasta de acesso do BMO") {
+            val folder = ui.folderStatus
+            Text(
+                when {
+                    folder == null -> "Toque em atualizar para consultar o PC."
+                    folder.authorized -> "Pasta autorizada:\n${folder.path}"
+                    else -> "Nenhuma pasta autorizada. O BMO não pode ler nem alterar arquivos até você escolher uma pasta."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (folder?.authorized == true) BmoInk else BmoWarning,
+            )
+            if (folder != null) {
+                Text(
+                    "Sistema: ${folder.os.ifBlank { "não informado" }}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = BmoInkSoft,
+                )
+                if (folder.selectedAt.isNotBlank()) {
+                    Text(
+                        "Autorizada em: ${folder.selectedAt}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = BmoInkSoft,
+                    )
+                }
+                Text(
+                    "Seletor no PC: ${folder.picker.ifBlank { "indisponível" }} • " +
+                        "Sessão gráfica: ${if (folder.displayAvailable) "disponível" else "indisponível"}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = BmoInkSoft,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = {
+                        folderBusy = true
+                        folderError = null
+                        folderNotice = null
+                        engine.selectFolder { result ->
+                            folderBusy = false
+                            result.onSuccess { state ->
+                                folderNotice = if (state.authorized) {
+                                    "Pasta autorizada no PC."
+                                } else {
+                                    "Seleção cancelada."
+                                }
+                            }
+                            result.onFailure { error ->
+                                folderError = error.message ?: "O seletor de pastas falhou."
+                            }
+                        }
+                    },
+                    enabled = ui.connected && !folderBusy,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(if (folderBusy) "Aguardando o PC..." else "Escolher pasta no PC")
+                }
+                OutlinedButton(
+                    onClick = {
+                        folderBusy = true
+                        folderError = null
+                        folderNotice = null
+                        engine.revokeFolder { result ->
+                            folderBusy = false
+                            result.onSuccess { folderNotice = "Acesso revogado." }
+                            result.onFailure { error ->
+                                folderError = error.message ?: "Não foi possível revogar."
+                            }
+                        }
+                    },
+                    enabled = ui.connected && !folderBusy && folder?.authorized == true,
+                    shape = RoundedCornerShape(14.dp),
+                ) { Text("Revogar") }
+            }
+            folderNotice?.let {
+                Spacer(Modifier.height(6.dp))
+                Text(it, color = BmoInk, style = MaterialTheme.typography.bodyMedium)
+            }
+            folderError?.let {
+                Spacer(Modifier.height(6.dp))
+                Text(it, color = BmoError, style = MaterialTheme.typography.bodyMedium)
+            }
+            Text(
+                "O seletor nativo abre na tela do PC (KDE: kdialog; alternativa: zenity). " +
+                    "Todas as ferramentas de arquivo do BMO ficam presas a essa pasta.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = BmoInkSoft,
             )

@@ -28,6 +28,20 @@ cd "$ROOT/backend"
 
 echo "[check] Testes unitários do Android"
 cd "$ROOT/android-app"
+if [ -z "${JAVA_HOME:-}" ] || [ ! -x "$JAVA_HOME/bin/javac" ]; then
+  for candidate in \
+    "$HOME/.local/jdks"/jdk-21* \
+    "$HOME/.local/jdks"/jdk-17* \
+    "$HOME/.local"/jdk-21* \
+    "$HOME/.local"/jdk-17* \
+    /usr/lib/jvm/java-21-openjdk* \
+    /usr/lib/jvm/java-17-openjdk*; do
+    if [ -x "$candidate/bin/javac" ]; then
+      export JAVA_HOME="$candidate"
+      break
+    fi
+  done
+fi
 ./gradlew testDebugUnitTest
 
 echo "[check] Build debug do Android"

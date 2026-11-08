@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import secrets
 import time
 import uuid
@@ -26,10 +27,16 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from .actions import ALLOWED_ACTIONS, detect_local_intent, parse_authorized_action
+from .acoustic_wakeword import AcousticWakeWord
+from .agent import AgentResult, ToolAgent
+from .apps import AppManager
 from .audio import EnergyVad, pcm16_to_wav
 from .config import DATA_DIR, load_config, public_config, resolve_runtime_paths
 from .discovery import start_discovery
+from .files import Workspace, WorkspaceError
+from .folder_picker import FolderPicker, FolderPickerError
 from .llm import LlmError, LlmUnavailable, OllamaBrain, sanitize_reply
+from .media import MediaError, MediaService
 from .protocol import (
     PROTOCOL_VERSION,
     SERVICE_VERSION,
@@ -37,20 +44,33 @@ from .protocol import (
     now_ms,
     validate_audio_start,
     validate_client_message,
+    validate_confirmation,
     validate_location,
     validate_text,
 )
-from .stt import SttError, SttUnavailable, WhisperCppStt
+from .stt import SttError, SttUnavailable, build_stt
+from .sysinfo import SystemInfo
+from .toolkit import PendingConfirmation, ToolRegistry, result_text
 from .tts import TtsError, TtsService, TtsUnavailable
-from .wakeword import WakeWordDetector
+from .wakeword import WakeWordDetector, normalize_text
 from .weather import (
     WeatherError,
     WeatherService,
     WeatherUnavailable,
     detect_weather_intent,
 )
+from .web import WebService
 
 log = logging.getLogger("bmo.server")
+
+# Respostas aceitas para confirmar ou cancelar uma exclusão pendente.
+_AFFIRMATIVE = re.compile(
+    r"^(sim|sim confirmo|confirmo|confirmado|pode|pode excluir|pode apagar|"
+    r"isso|claro|com certeza|yes|ok)\b"
+)
+_NEGATIVE = re.compile(
+    r"^(nao|cancela|cancelar|deixa|deixa pra la|deixa para la|no|nunca|para)\b"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -59,11 +79,25 @@ log = logging.getLogger("bmo.server")
 
 
 class Services:
-    def __init__(self, config: dict[str, Any], *, stt: Any = None, tts: Any = None,
-                 weather: Any = None,
-                 brain_factory: Callable[[], Any] | None = None) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any],
+        *,
+        stt: Any = None,
+        tts: Any = None,
+        weather: Any = None,
+        brain_factory: Callable[[], Any] | None = None,
+        workspace: Any = None,
+        apps: Any = None,
+        media: Any = None,
+        web: Any = None,
+        system: Any = None,
+        registry: Any = None,
+        picker: Any = None,
+        agent_factory: Callable[[], Any] | None = None,
+    ) -> None:
         self.config = config
-        self.stt = stt if stt is not None else WhisperCppStt(config["stt"])
+        self.stt = stt if stt is not None else build_stt(config["stt"])
         self.tts = tts if tts is not None else TtsService(config["tts"])
         self.weather = (
             weather if weather is not None
@@ -74,6 +108,38 @@ class Services:
             config["wakeword"].get("phrases"),
             enabled=bool(config["wakeword"].get("enabled", True)),
         )
+        self.wake_acoustic = self._build_acoustic_detector(config["wakeword"])
+        self.wake_mode = self._resolve_wake_mode(config["wakeword"])
+
+        tools_cfg = config.get("tools", {}) or {}
+        self.tools_enabled = bool(tools_cfg.get("enabled", True))
+        access_file = tools_cfg.get("access_file")
+        self.workspace = (
+            workspace
+            if workspace is not None
+            else Workspace(Path(access_file) if access_file else None)
+        )
+        self.apps = apps if apps is not None else AppManager(tools_cfg.get("apps", {}))
+        self.media = media if media is not None else MediaService(tools_cfg.get("media", {}))
+        web_cfg = dict(tools_cfg.get("web", {}) or {})
+        web_cfg.setdefault("allow_private_urls", bool(tools_cfg.get("allow_private_urls", False)))
+        self.web = web if web is not None else WebService(web_cfg)
+        self.system = system if system is not None else SystemInfo(tools_cfg.get("system", {}))
+        self.registry = (
+            registry
+            if registry is not None
+            else ToolRegistry(
+                workspace=self.workspace,
+                apps=self.apps,
+                media=self.media,
+                web=self.web,
+                system=self.system,
+                config=tools_cfg,
+            )
+        )
+        self.folder = picker if picker is not None else FolderPicker(self.workspace)
+        self.agent_factory = agent_factory or self._default_agent_factory
+
         self.started_at = time.time()
         self.audio_cache: dict[str, tuple[bytes, float]] = {}
         self.http_brains: dict[str, Any] = {}
@@ -82,6 +148,86 @@ class Services:
         self.stt_available = False
         self.llm_available: bool | None = None
         self.tts_available = self.tts.available()
+
+    def _build_acoustic_detector(self, cfg: dict[str, Any]) -> AcousticWakeWord | None:
+        """Carrega o detector acústico se configurado e disponível.
+
+        Falhas não derrubam o backend: caem de volta para o modo transcrição.
+        """
+        mode = str(cfg.get("mode", "transcript")).lower()
+        if not bool(cfg.get("enabled", True)) or mode not in {"acoustic", "hybrid"}:
+            return None
+        model = cfg.get("acoustic_model")
+        mel = cfg.get("mel_model")
+        embedding = cfg.get("embedding_model")
+        if not model or not mel or not embedding:
+            log.warning("Wakeword acústico habilitado, mas caminhos dos modelos ausentes.")
+            return None
+        try:
+            detector = AcousticWakeWord(
+                model_path=model,
+                mel_path=mel,
+                embedding_path=embedding,
+                threshold=float(cfg.get("threshold", 0.75)),
+                cooldown_s=float(cfg.get("cooldown_s", 2.0)),
+                hop_s=float(cfg.get("hop_ms", 100)) / 1000.0,
+                min_consecutive=int(cfg.get("min_consecutive", 1)),
+            )
+            log.info("Detector acústico carregado: %s (modo %s)", model, mode)
+            return detector
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Detector acústico indisponível (%s); usando transcrição: %s", model, exc)
+            return None
+
+    def _resolve_wake_mode(self, cfg: dict[str, Any]) -> str:
+        """Retorna o modo efetivo, considerando o detector realmente carregado."""
+        mode = str(cfg.get("mode", "transcript")).lower()
+        if mode not in {"transcript", "acoustic", "hybrid"}:
+            log.warning("Modo de wakeword inválido (%s); usando transcript.", mode)
+            return "transcript"
+        if mode in {"acoustic", "hybrid"} and self.wake_acoustic is None:
+            log.warning("Modo de wakeword '%s' sem detector acústico; usando transcript.", mode)
+            return "transcript"
+        return mode
+
+    def _default_agent_factory(self) -> Any:
+        llm_cfg = dict(self.config.get("llm", {}))
+        llm_cfg["max_tool_steps"] = int(
+            (self.config.get("tools", {}) or {}).get("max_tool_steps", 5)
+        )
+        return ToolAgent(
+            llm_cfg,
+            self.registry,
+            system_prompt=str(llm_cfg.get("system_prompt", "")),
+            history_messages=int(llm_cfg.get("history_messages", 12)),
+        )
+
+    def make_agent(self) -> Any | None:
+        if not self.tools_enabled:
+            return None
+        try:
+            return self.agent_factory()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Agente de ferramentas indisponível: %s", exc)
+            return None
+
+    def wake_status(self) -> dict[str, Any]:
+        cfg = self.config.get("wakeword", {})
+        return {
+            "enabled": bool(cfg.get("enabled", True)),
+            "mode": self.wake_mode,
+            "configured_mode": cfg.get("mode", "transcript"),
+            "acoustic": self.wake_acoustic is not None,
+            "threshold": cfg.get("threshold"),
+            "phrases": cfg.get("phrases", []),
+            "note": cfg.get("note", ""),
+        }
+
+    def capabilities(self) -> list[str]:
+        base = ["text", "audio", "tts", "vad", "location", "get_time", "get_date", "get_weather"]
+        if self.tools_enabled:
+            base.extend(["tools", "internet", "desktop", "media", "files", "folder", "system_info"])
+        return base
 
     async def refresh_status(self, force: bool = False) -> dict[str, Any]:
         if not force and self._status_cache and time.time() - self._status_at < 10:
@@ -182,6 +328,10 @@ class BodyTextRequest(BaseModel):
     longitude: float | None = Field(default=None, ge=-180, le=180)
 
 
+class FolderRequest(BaseModel):
+    path: str = Field(default="", max_length=4096)
+
+
 def _error_response(code: str, message: str, status_code: int = 400) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
@@ -260,13 +410,13 @@ def create_app(config: dict[str, Any] | None = None, services: Services | None =
                 "format": "pcm_s16le",
                 "frame_ms": int(config["audio"]["frame_ms"]),
             },
-            "wakeword": {
-                "enabled": bool(config["wakeword"]["enabled"]),
-                "mode": config["wakeword"].get("mode", "transcript"),
-                "phrases": config["wakeword"].get("phrases", []),
-                "note": config["wakeword"].get("note", ""),
+            "wakeword": services.wake_status(),
+            "tools": {
+                "enabled": services.tools_enabled,
+                "names": services.registry.names() if services.tools_enabled else [],
+                "folder": services.workspace.status(),
             },
-            "capabilities": ["text", "audio", "tts", "vad", "location", "get_time", "get_date", "get_weather"],
+            "capabilities": services.capabilities(),
             "allowed_commands": config["security"].get("allowed_commands", []),
         }
 
@@ -286,6 +436,47 @@ def create_app(config: dict[str, Any] | None = None, services: Services | None =
             "services": status,
             "recent_log": [line.rstrip() for line in lines],
         }
+
+    @app.get("/api/v1/folder", dependencies=[Depends(require_auth)])
+    async def folder_status() -> dict[str, Any]:
+        return services.folder.status()
+
+    @app.post("/api/v1/folder", dependencies=[Depends(require_auth)])
+    async def folder_authorize(request: FolderRequest) -> Any:
+        path = request.path.strip()
+        if not path:
+            return _error_response("empty_path", "Informe o caminho da pasta.", 422)
+        try:
+            state = services.workspace.authorize(path)
+        except WorkspaceError as exc:
+            return _error_response("invalid_folder", str(exc), 400)
+        return state.as_dict()
+
+    @app.post("/api/v1/folder/select", dependencies=[Depends(require_auth)])
+    async def folder_select(request: FolderRequest | None = None) -> Any:
+        start = request.path.strip() if request and request.path else None
+        try:
+            return await services.folder.select(start)
+        except FolderPickerError as exc:
+            return _error_response("picker_error", str(exc), 503)
+
+    @app.post("/api/v1/folder/revoke", dependencies=[Depends(require_auth)])
+    async def folder_revoke() -> dict[str, Any]:
+        return services.folder.revoke()
+
+    @app.get("/api/v1/tools", dependencies=[Depends(require_auth)])
+    async def tools_status() -> dict[str, Any]:
+        return services.registry.status()
+
+    @app.get("/api/v1/media", dependencies=[Depends(require_auth)])
+    async def media_status() -> Any:
+        try:
+            return await services.media.current()
+        except MediaError as exc:
+            return JSONResponse(
+                status_code=503,
+                content={"available": False, "error": str(exc)},
+            )
 
     @app.get("/api/v1/audio/{audio_id}.wav", dependencies=[Depends(require_auth)])
     async def get_audio(audio_id: str):
@@ -416,6 +607,8 @@ class BmoSession:
         self._recovery_task: asyncio.Task | None = None
         self._ignore_audio_until = 0.0
         self._brain = services.brain_factory()
+        self._agent = services.make_agent()
+        self.pending_confirmation: PendingConfirmation | None = None
         audio_cfg = self.config["audio"]
         self.vad = EnergyVad(
             sample_rate=int(audio_cfg["sample_rate"]),
@@ -466,12 +659,12 @@ class BmoSession:
                 "channels": 1,
                 "frame_ms": int(self.config["audio"]["frame_ms"]),
             },
-            wakeword={
-                "enabled": bool(self.config["wakeword"]["enabled"]),
-                "mode": self.config["wakeword"].get("mode", "transcript"),
-                "phrases": self.config["wakeword"].get("phrases", []),
+            wakeword=self.services.wake_status(),
+            tools={
+                "enabled": self.services.tools_enabled,
+                "folder": self.services.workspace.status(),
             },
-            capabilities=["text", "audio", "tts", "vad", "location", "get_time", "get_date", "get_weather"],
+            capabilities=self.services.capabilities(),
         )
         await self.set_state("idle", "Conectado. Toque em Ouvir para começar.")
         try:
@@ -558,6 +751,7 @@ class BmoSession:
             self.bypass_wake_once = True
             self._ignore_audio_until = 0.0
             self.vad.reset()
+            self._reset_acoustic()
             await self.event("wakeword.activated", manual=True, message="Pode falar, estou ouvindo.")
             if not self.capture_active:
                 await self.set_state("listening", "Ouvindo uma vez. O microfone do app precisa estar ativo.")
@@ -573,11 +767,13 @@ class BmoSession:
                 return
             self.capture_active = True
             self.vad.reset()
+            self._reset_acoustic()
             await self.event("audio.ready", **audio_cfg)
             if self.state not in {"thinking", "speaking"}:
                 await self.set_state(self.resting_state(), "Microfone ativo. Diga 'Ei, BMO'.")
         elif msg_type == "audio.end":
             self.capture_active = False
+            self._reset_acoustic()
             events = self.vad.flush()
             await self._process_vad_events(events)
             if self.state not in {"thinking", "speaking"}:
@@ -592,6 +788,20 @@ class BmoSession:
                 return
             await self.event("transcript", text=text_value, final=True, source="texto")
             await self.start_response(text_value)
+        elif msg_type == "confirmation":
+            try:
+                data = validate_confirmation(payload)
+            except ProtocolError as exc:
+                await self.send_error(exc.code, exc.message)
+                return
+            pending = self.pending_confirmation
+            if pending is None or pending.id != data["id"]:
+                await self.send_error(
+                    "confirmation_invalid",
+                    "Nenhuma confirmação pendente com esse identificador.",
+                )
+                return
+            await self.start_response("sim, confirmo" if data["approved"] else "não, cancelo")
         elif msg_type == "interrupt":
             await self.interrupt(reason="user")
         elif msg_type == "playback.started":
@@ -600,11 +810,15 @@ class BmoSession:
             self._cancel_idle_timer()
             self._ignore_audio_until = time.monotonic() + 0.4
             self.vad.reset()
+            self._reset_acoustic()
             if self.state in {"speaking", "thinking", "error"}:
                 await self.set_state(self.resting_state(), "Pronto para ouvir.")
         elif msg_type == "reset":
             if hasattr(self._brain, "reset"):
                 self._brain.reset()
+            if self._agent is not None and hasattr(self._agent, "reset"):
+                self._agent.reset()
+            self.pending_confirmation = None
             await self.event("history.reset")
             await self.set_state(self.resting_state(), "Histórico apagado.")
 
@@ -624,8 +838,37 @@ class BmoSession:
         if time.monotonic() < self._ignore_audio_until:
             self.vad.reset()
             return
+        if self.services.wake_acoustic is not None:
+            loop = asyncio.get_running_loop()
+            detections = await loop.run_in_executor(
+                None, self.services.wake_acoustic.feed, data
+            )
+            for detection in detections:
+                await self._on_acoustic_detection(detection)
         events = self.vad.feed(data)
         await self._process_vad_events(events)
+
+    def _reset_acoustic(self) -> None:
+        detector = self.services.wake_acoustic
+        if detector is not None and hasattr(detector, "reset"):
+            with contextlib.suppress(Exception):
+                detector.reset()
+
+    async def _on_acoustic_detection(self, detection: Any) -> None:
+        """Ativação pelo classificador acústico (independente do LLM/STT)."""
+        if self.state in {"thinking", "speaking"}:
+            return
+        if self.bypass_wake_once:
+            return
+        self.bypass_wake_once = True
+        await self.event(
+            "wakeword.detected",
+            source="acoustic",
+            phrase="saturnbmo",
+            score=round(float(getattr(detection, "score", 0.0)), 4),
+            message="Palavra de ativação detectada.",
+        )
+        await self.set_state("listening", "Pode falar, estou ouvindo.")
 
     async def _process_vad_events(self, events: list[Any]) -> None:
         for event in events:
@@ -670,10 +913,29 @@ class BmoSession:
             await self.set_state(self.resting_state(), "Não entendi. Pode repetir?")
             return
 
-        wake_required = bool(self.config["wakeword"]["enabled"]) and not self.bypass_wake_once
-        if wake_required:
-            match = self.services.wake.detect(text)
-            if not match.detected:
+        wake_enabled = bool(self.config["wakeword"]["enabled"])
+        wake_mode = self.services.wake_mode
+        transcript_required = (
+            wake_enabled and wake_mode in {"transcript", "hybrid"} and not self.bypass_wake_once
+        )
+        acoustic_only = (
+            wake_enabled and wake_mode == "acoustic" and not self.bypass_wake_once
+        )
+        match = self.services.wake.detect(text) if wake_enabled else None
+
+        if acoustic_only:
+            # No modo acústico puro não há fallback por transcrição.
+            await self.event(
+                "wakeword.not_detected",
+                reason="acoustic",
+                transcript=text,
+                message="Não ouvi a palavra de ativação. Diga 'Ei, BMO' ou toque em Falar.",
+            )
+            await self.set_state(self.resting_state(), "Aguardando 'Ei, BMO'.")
+            return
+
+        if transcript_required:
+            if not match or not match.detected:
                 await self.event(
                     "wakeword.not_detected",
                     transcript=text,
@@ -681,7 +943,12 @@ class BmoSession:
                 )
                 await self.set_state(self.resting_state(), "Aguardando 'Ei, BMO'.")
                 return
-            await self.event("wakeword.detected", phrase=match.matched_phrase, transcript=text)
+            await self.event(
+                "wakeword.detected",
+                source="transcript",
+                phrase=match.matched_phrase,
+                transcript=text,
+            )
             if not match.remaining_text:
                 self.bypass_wake_once = True
                 await self.event("assistant.text.delta", text="Pode falar!", id="wake-ack")
@@ -689,6 +956,10 @@ class BmoSession:
                                  audio_available=False)
                 await self.set_state(self.resting_state(), "Ouvindo...")
                 return
+            text = match.remaining_text
+        elif match is not None and match.detected and match.remaining_text:
+            # Ativação acústica: se o STT também transcreveu a frase de chamada,
+            # remova-a para o LLM receber apenas a pergunta.
             text = match.remaining_text
         self.bypass_wake_once = False
         await self.event("request.accepted", text=text)
@@ -706,7 +977,11 @@ class BmoSession:
         gen = self.generation
         assistant_id = uuid.uuid4().hex[:12]
         await self.set_state("thinking", "Pensando...")
+        await self.event("activity", activity="processing", status="start", label="Pensando")
         try:
+            if self.pending_confirmation is not None:
+                if await self._handle_confirmation_reply(user_text, assistant_id, gen):
+                    return
             local = detect_local_intent(user_text)
             weather_intent = None if local is not None else detect_weather_intent(user_text)
             if local is not None:
@@ -724,6 +999,38 @@ class BmoSession:
                     await self._recover_after_error()
                     return
                 await self.event("assistant.text.delta", text=answer, id=assistant_id)
+            elif self._agent is not None:
+                try:
+                    result = await self._agent.run(user_text, self.event)
+                except LlmUnavailable as exc:
+                    await self.send_error("llm_unavailable", str(exc))
+                    await self._recover_after_error()
+                    return
+                except LlmError as exc:
+                    await self.send_error("llm_error", str(exc))
+                    await self._recover_after_error()
+                    return
+                if gen != self.generation:
+                    return
+                if result.pending is not None:
+                    self.pending_confirmation = result.pending
+                answer = result.text
+                if not answer:
+                    await self.send_error("empty_answer", "O modelo não retornou resposta.")
+                    await self._recover_after_error()
+                    return
+                await self.event("assistant.text.delta", text=answer, id=assistant_id)
+                if result.pending is not None:
+                    # Não sinalize sucesso antes da confirmação do usuário.
+                    await self.event(
+                        "assistant.text.done",
+                        text=answer,
+                        id=assistant_id,
+                        audio_available=self.services.tts.available(),
+                    )
+                    if self.services.tts.available():
+                        await self.speak(answer, assistant_id, gen)
+                    return
             else:
                 pieces: list[str] = []
                 try:
@@ -752,6 +1059,7 @@ class BmoSession:
                     answer = authorized.text
             if gen != self.generation:
                 return
+            await self.event("activity", activity="success", status="done", label="Pronto")
             await self.event(
                 "assistant.text.done",
                 text=answer,
@@ -771,8 +1079,84 @@ class BmoSession:
             raise
         except Exception as exc:  # noqa: BLE001
             log.exception("Erro ao gerar resposta: %s", exc)
+            await self.event("activity", activity="error", status="error", label="Erro")
             await self.send_error("internal_error", "Ocorreu um erro ao gerar a resposta.")
             await self._recover_after_error()
+
+    async def _handle_confirmation_reply(
+        self, user_text: str, assistant_id: str, gen: int
+    ) -> bool:
+        """Executa ou cancela uma exclusão pendente a partir da fala/texto.
+
+        Retorna True quando a mensagem era uma resposta de confirmação e já foi
+        tratada (a resposta normal não deve continuar).
+        """
+        pending = self.pending_confirmation
+        if pending is None:
+            return False
+        normalized = normalize_text(user_text)
+        affirmative = bool(_AFFIRMATIVE.match(normalized))
+        negative = bool(_NEGATIVE.match(normalized))
+        if not affirmative and not negative:
+            # A pessoa mudou de assunto: a exclusão não é executada.
+            self.pending_confirmation = None
+            await self.event(
+                "confirmation.result",
+                id=pending.id,
+                approved=False,
+                ok=False,
+                message="Confirmação abandonada.",
+            )
+            return False
+
+        self.pending_confirmation = None
+        if negative:
+            answer = "Tudo bem, cancelei a exclusão."
+            await self.event(
+                "confirmation.result",
+                id=pending.id,
+                approved=False,
+                ok=True,
+                message=answer,
+            )
+            await self.event("activity", activity="success", status="done", label="Cancelado")
+        else:
+            await self.event(
+                "activity",
+                activity=pending.activity,
+                status="start",
+                label="Executando exclusão",
+            )
+            result = await self.services.registry.execute_confirmed(pending)
+            if result.ok:
+                path = result.data.get("path", "")
+                answer = f"Pronto. Excluí '{path}' da pasta autorizada."
+                await self.event("activity", activity="success", status="done", label="Exclusão concluída")
+            else:
+                detail = result.data.get("error", "erro desconhecido")
+                answer = f"Não consegui excluir: {detail}"
+                await self.event("activity", activity="error", status="error", label="Falha na exclusão")
+            await self.event(
+                "confirmation.result",
+                id=pending.id,
+                approved=True,
+                ok=result.ok,
+                message=answer,
+            )
+        if gen != self.generation:
+            return True
+        await self.event("assistant.text.delta", text=answer, id=assistant_id)
+        await self.event(
+            "assistant.text.done",
+            text=answer,
+            id=assistant_id,
+            audio_available=self.services.tts.available(),
+        )
+        if self.services.tts.available():
+            await self.speak(answer, assistant_id, gen)
+        else:
+            await self.set_state(self.resting_state(), "Resposta exibida sem áudio.")
+        return True
 
     async def speak(self, text: str, assistant_id: str, gen: int) -> None:
         try:
@@ -844,6 +1228,7 @@ class BmoSession:
         self._utterance_task = None
         self._cancel_idle_timer()
         self.vad.reset()
+        self._reset_acoustic()
         self._ignore_audio_until = time.monotonic() + 0.4
         await self.event("audio.stop", reason=reason)
         await self.set_state(self.resting_state(), "Fala interrompida." if reason == "user" else "Pronto.")

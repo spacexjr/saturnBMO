@@ -2,14 +2,17 @@ import copy
 import math
 import struct
 import time
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from bmo_backend.agent import AgentResult
 from bmo_backend.audio import pcm16_to_wav, split_wav
 from bmo_backend.config import DEFAULT_CONFIG, resolve_runtime_paths
 from bmo_backend.server import Services, create_app
 from bmo_backend.stt import SttResult
+from bmo_backend.toolkit import PendingConfirmation, ToolResult
 from bmo_backend.tts import TtsAudio
 
 TOKEN = "token-de-teste"
@@ -91,6 +94,12 @@ def make_config(tmp_path):
     cfg["_token"] = TOKEN
     cfg["paths"]["log_file"] = str(tmp_path / "bmo.log")
     cfg["security"]["audio_cache_ttl_s"] = 60
+    # Os testes usam o cérebro falso; ferramentas ficam desligadas por padrão.
+    # Testes específicos de ferramentas ligam e injetam seus próprios serviços.
+    cfg["tools"]["enabled"] = False
+    cfg["tools"]["access_file"] = str(tmp_path / "access.json")
+    # Evita carregar os ONNX em todos os testes; testes acústicos são separados.
+    cfg["wakeword"]["mode"] = "transcript"
     resolve_runtime_paths(cfg)
     return cfg
 
@@ -330,3 +339,200 @@ def test_websocket_audio_vad_wakeword_and_response(tmp_path):
             assert "assistant.text.done" in seen
             assert "audio.start" in seen
             assert got_audio
+
+
+# ---------------------------------------------------------------------------
+# Wake word efetivo, pasta autorizada e confirmação de ferramentas
+# ---------------------------------------------------------------------------
+
+
+def test_wake_mode_falls_back_without_acoustic_detector():
+    services = Services.__new__(Services)
+    services.wake_acoustic = None
+    assert services._resolve_wake_mode({"mode": "acoustic"}) == "transcript"
+    assert services._resolve_wake_mode({"mode": "hybrid"}) == "transcript"
+    assert services._resolve_wake_mode({"mode": "transcript"}) == "transcript"
+    assert services._resolve_wake_mode({"mode": "invalido"}) == "transcript"
+
+    services.wake_acoustic = object()
+    assert services._resolve_wake_mode({"mode": "acoustic"}) == "acoustic"
+    assert services._resolve_wake_mode({"mode": "hybrid"}) == "hybrid"
+    assert services._resolve_wake_mode({"mode": "transcript"}) == "transcript"
+
+
+def test_info_exposes_effective_wakeword_mode(tmp_path):
+    app, services, _ = make_app(tmp_path)
+    services.wake_mode = "hybrid"
+    services.config["wakeword"]["mode"] = "hybrid"
+    with TestClient(app) as client:
+        info = client.get("/api/v1/info", headers={"Authorization": f"Bearer {TOKEN}"})
+        assert info.status_code == 200
+        wake = info.json()["wakeword"]
+        assert wake["mode"] == "hybrid"
+        assert wake["configured_mode"] == "hybrid"
+        assert wake["acoustic"] is False
+
+
+def test_folder_endpoints_authorize_and_revoke(tmp_path):
+    app, services, _ = make_app(tmp_path)
+    chosen = tmp_path / "minha-pasta"
+    chosen.mkdir()
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    with TestClient(app) as client:
+        status = client.get("/api/v1/folder", headers=headers)
+        assert status.status_code == 200
+        assert status.json()["authorized"] is False
+
+        saved = client.post("/api/v1/folder", headers=headers, json={"path": str(chosen)})
+        assert saved.status_code == 200
+        assert Path(saved.json()["path"]) == chosen.resolve()
+        assert saved.json()["authorized"] is True
+
+        reloaded = client.get("/api/v1/folder", headers=headers)
+        assert reloaded.json()["path"] == str(chosen.resolve())
+
+        revoked = client.post("/api/v1/folder/revoke", headers=headers)
+        assert revoked.status_code == 200
+        assert revoked.json()["authorized"] is False
+
+        tools = client.get("/api/v1/tools", headers=headers)
+        assert tools.status_code == 200
+        assert "delete_file" in tools.json()["tools"]
+
+
+class FakeRegistry:
+    def __init__(self):
+        self.confirmed = []
+
+    def names(self):
+        return ["delete_file"]
+
+    def status(self):
+        return {"enabled": True, "tools": ["delete_file"]}
+
+    async def execute_confirmed(self, pending):
+        self.confirmed.append(pending)
+        return ToolResult(True, {"ok": True, "path": pending.arguments.get("path", "")})
+
+
+class FakeAgent:
+    def __init__(self, pending):
+        self.pending = pending
+        self.calls = []
+
+    def reset(self):
+        self.calls.clear()
+
+    async def run(self, text, emit):
+        self.calls.append(text)
+        await emit(
+            "confirmation.request",
+            id=self.pending.id,
+            tool=self.pending.tool,
+            prompt=self.pending.prompt,
+        )
+        return AgentResult(text=self.pending.prompt, pending=self.pending)
+
+
+def make_tools_app(tmp_path):
+    cfg = make_config(tmp_path)
+    cfg["tools"]["enabled"] = True
+    stt = FakeStt()
+    weather = FakeWeather()
+    registry = FakeRegistry()
+    pending = PendingConfirmation(
+        id="conf123",
+        tool="delete_file",
+        arguments={"path": "segredo.txt"},
+        prompt="Confirma excluir 'segredo.txt'?",
+        activity="editing_file",
+    )
+    agent = FakeAgent(pending)
+    services = Services(
+        cfg,
+        stt=stt,
+        tts=FakeTts(),
+        weather=weather,
+        brain_factory=lambda: FakeBrain(),
+        registry=registry,
+        agent_factory=lambda: agent,
+    )
+    app = create_app(cfg, services=services)
+    return app, services, registry, agent
+
+
+def test_websocket_requires_confirmation_before_destructive_tool(tmp_path):
+    app, _, registry, agent = make_tools_app(tmp_path)
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/ws", headers={"Authorization": f"Bearer {TOKEN}"}
+        ) as ws:
+            ws.receive_json()  # hello
+            ws.receive_json()  # state
+            ws.send_json({"type": "text", "text": "apague o arquivo segredo"})
+            seen = []
+            confirmation_id = None
+            for _ in range(120):
+                message = ws.receive()
+                if not message.get("text"):
+                    continue
+                event = __import__("json").loads(message["text"])
+                seen.append(event["type"])
+                if event["type"] == "confirmation.request":
+                    confirmation_id = event["id"]
+                if event["type"] == "audio.end" and "confirmation.request" in seen:
+                    break
+            assert agent.calls == ["apague o arquivo segredo"]
+            assert "confirmation.request" in seen
+            assert registry.confirmed == []
+
+            ws.send_json(
+                {"type": "confirmation", "id": confirmation_id, "approved": True}
+            )
+            confirmed_seen = []
+            for _ in range(120):
+                message = ws.receive()
+                if not message.get("text"):
+                    continue
+                event = __import__("json").loads(message["text"])
+                confirmed_seen.append(event)
+                if event["type"] == "assistant.text.done" and event.get("id") != "wake-ack":
+                    break
+            assert registry.confirmed
+            assert registry.confirmed[0].arguments == {"path": "segredo.txt"}
+            kinds = [event["type"] for event in confirmed_seen]
+            assert "confirmation.result" in kinds
+            result = next(event for event in confirmed_seen if event["type"] == "confirmation.result")
+            assert result["approved"] is True and result["ok"] is True
+
+
+def test_websocket_cancel_confirmation_sends_no_execution(tmp_path):
+    app, _, registry, _ = make_tools_app(tmp_path)
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/ws", headers={"Authorization": f"Bearer {TOKEN}"}
+        ) as ws:
+            ws.receive_json()
+            ws.receive_json()
+            ws.send_json({"type": "text", "text": "apague o arquivo segredo"})
+            confirmation_id = None
+            for _ in range(120):
+                message = ws.receive()
+                if not message.get("text"):
+                    continue
+                event = __import__("json").loads(message["text"])
+                if event["type"] == "confirmation.request":
+                    confirmation_id = event["id"]
+                if event["type"] == "audio.end" and confirmation_id:
+                    break
+            ws.send_json(
+                {"type": "confirmation", "id": confirmation_id, "approved": False}
+            )
+            for _ in range(120):
+                message = ws.receive()
+                if not message.get("text"):
+                    continue
+                event = __import__("json").loads(message["text"])
+                if event["type"] == "confirmation.result":
+                    break
+            assert registry.confirmed == []

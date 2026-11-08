@@ -87,20 +87,26 @@ fun BmoFace(
     fullBleed: Boolean = false,
 ) {
     val context = LocalContext.current
-    val derived = remember(ui.transcript, ui.assistantText, ui.faceState) {
+    val derived = remember(
+        ui.transcript,
+        ui.assistantText,
+        ui.faceState,
+        ui.music,
+        ui.activity,
+    ) {
         BmoFaceController.visualFor(ui)
     }
     var visual by remember { mutableStateOf(derived) }
 
-    LaunchedEffect(ui.transcript, ui.assistantText, ui.faceState) {
+    LaunchedEffect(ui.transcript, ui.assistantText, ui.faceState, ui.music, ui.activity) {
         visual = derived
         when (ui.faceState) {
             BmoState.THINKING, BmoState.SPEAKING -> Unit
-            BmoState.IDLE -> if (derived.theme != BmoFaceTheme.NONE) {
+            BmoState.IDLE -> if (derived.theme != BmoFaceTheme.NONE && !ui.musicActive) {
                 delay(THEME_IDLE_LINGER_MS)
-                visual = neutralVisual(ui.faceState)
+                visual = neutralVisual(ui.faceState, derived.activity)
             }
-            else -> visual = neutralVisual(ui.faceState)
+            else -> visual = neutralVisual(ui.faceState, derived.activity)
         }
     }
 
@@ -125,6 +131,15 @@ fun BmoFace(
         }
     }
 
+    // Arte de nuvens fornecida em assets/faces/clouds.png (fundo transparente).
+    val cloudArt: ImageBitmap? = remember {
+        runCatching {
+            context.assets.open("faces/clouds.png").use { stream ->
+                BitmapFactory.decodeStream(stream)?.asImageBitmap()
+            }
+        }.getOrNull()
+    }
+
     var blink by remember { mutableStateOf(false) }
     LaunchedEffect(expressionKey, resumed) {
         blink = false
@@ -140,7 +155,8 @@ fun BmoFace(
 
     val clock = rememberBmoFaceClock(
         enabled = visual.theme != BmoFaceTheme.NONE ||
-            visual.emotion != com.spacexjr.saturnbmo.ui.face.BmoFaceEmotion.NEUTRAL,
+            visual.emotion != com.spacexjr.saturnbmo.ui.face.BmoFaceEmotion.NEUTRAL ||
+            visual.activity != com.spacexjr.saturnbmo.BmoActivity.NONE,
     )
     val frame = frames.getOrNull(frameIndex % frames.size.coerceAtLeast(1))
 
@@ -153,6 +169,7 @@ fun BmoFace(
     ) {
         BmoFaceRenderer(
             face = frame,
+            cloudArt = cloudArt,
             visual = visual,
             clock = clock,
             micLevel = ui.micLevel,
@@ -165,7 +182,11 @@ fun BmoFace(
 
 private const val THEME_IDLE_LINGER_MS = 4_000L
 
-private fun neutralVisual(state: BmoState): BmoFaceVisual = BmoFaceVisual(
+private fun neutralVisual(
+    state: BmoState,
+    activity: com.spacexjr.saturnbmo.BmoActivity = com.spacexjr.saturnbmo.BmoActivity.NONE,
+): BmoFaceVisual = BmoFaceVisual(
     data = BmoFaceData(),
-    emotion = BmoFaceController.emotionFor(BmoFaceTheme.NONE, state),
+    emotion = BmoFaceController.emotionFor(BmoFaceTheme.NONE, state, activity = activity),
+    activity = activity,
 )
