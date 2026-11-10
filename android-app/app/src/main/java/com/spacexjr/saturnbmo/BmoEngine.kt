@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -43,6 +44,7 @@ class BmoEngine private constructor(context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val locationProvider = BmoLocation(appContext)
+    private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
     private val http = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(8, TimeUnit.SECONDS)
@@ -756,11 +758,24 @@ class BmoEngine private constructor(context: Context) {
     }
 
     private fun fetchMedia(): Result<MusicInfo> = runCatching {
-        val request = Request.Builder()
+        // /api/music/state traz posição, duração e fila reais do Mopidy.
+        // /api/v1/media continua como fallback para o player MPRIS antigo.
+        val primary = Request.Builder()
+            .url("${settings.httpUrl}/api/music/state")
+            .header("Authorization", "Bearer ${settings.token}")
+            .build()
+        http.newCall(primary).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (response.isSuccessful) return@use parseMusic(JSONObject(body))
+            if (response.code != 404 && response.code != 503) {
+                throw IllegalStateException(httpMessage(response.code, body))
+            }
+        }
+        val fallback = Request.Builder()
             .url("${settings.httpUrl}/api/v1/media")
             .header("Authorization", "Bearer ${settings.token}")
             .build()
-        http.newCall(request).execute().use { response ->
+        http.newCall(fallback).execute().use { response ->
             val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 throw IllegalStateException(httpMessage(response.code, body))
@@ -768,6 +783,172 @@ class BmoEngine private constructor(context: Context) {
             parseMusic(JSONObject(body))
         }
     }
+
+    // ------------------------------------------------------------------
+    // Controles de música (HTTP autenticado)
+    // ------------------------------------------------------------------
+
+    private fun musicRequest(path: String, payload: JSONObject? = null): JSONObject {
+        val builder = Request.Builder()
+            .url("${settings.httpUrl}$path")
+            .header("Authorization", "Bearer ${settings.token}")
+        val request = if (payload == null) {
+            builder.get().build()
+        } else {
+            builder.post(payload.toString().toRequestBody(jsonMediaType)).build()
+        }
+        http.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw IllegalStateException(httpMessage(response.code, body))
+            }
+            return JSONObject(body)
+        }
+    }
+
+    private fun musicCommand(
+        path: String,
+        payload: JSONObject? = null,
+        callback: ((Result<MusicInfo>) -> Unit)? = null,
+    ) {
+        if (!settings.isConfigured) {
+            callback?.invoke(Result.failure(IllegalStateException("Configure o servidor do PC.")))
+            return
+        }
+        scope.launch {
+            val result = runCatching {
+                val json = musicRequest(path, payload)
+                val info = parseMusic(json)
+                _ui.update { it.copy(music = mergeMusic(it.music, info)) }
+                info
+            }
+            result.onFailure { error -> addLog("ERRO", "Música: ${error.message}") }
+            mainHandler.post { callback?.invoke(result) }
+        }
+    }
+
+    fun musicPlay(trackId: String, callback: ((Result<MusicInfo>) -> Unit)? = null) {
+        musicCommand("/api/music/play", JSONObject().put("track_id", trackId), callback)
+    }
+
+    fun musicPause(callback: ((Result<MusicInfo>) -> Unit)? = null) {
+        musicCommand("/api/music/pause", JSONObject(), callback)
+    }
+
+    fun musicResume(callback: ((Result<MusicInfo>) -> Unit)? = null) {
+        musicCommand("/api/music/resume", JSONObject(), callback)
+    }
+
+    fun musicStop(callback: ((Result<MusicInfo>) -> Unit)? = null) {
+        musicCommand("/api/music/stop", JSONObject(), callback)
+    }
+
+    fun musicNext(callback: ((Result<MusicInfo>) -> Unit)? = null) {
+        musicCommand("/api/music/next", JSONObject(), callback)
+    }
+
+    fun musicPrevious(callback: ((Result<MusicInfo>) -> Unit)? = null) {
+        musicCommand("/api/music/previous", JSONObject(), callback)
+    }
+
+    fun musicSetVolume(percent: Int, callback: ((Result<MusicInfo>) -> Unit)? = null) {
+        musicCommand(
+            "/api/music/volume",
+            JSONObject().put("volume", percent.coerceIn(0, 100)),
+            callback,
+        )
+    }
+
+    fun musicTogglePlayback(callback: ((Result<MusicInfo>) -> Unit)? = null) {
+        val music = _ui.value.music
+        when {
+            music?.isPlaying == true -> musicPause(callback)
+            music?.isPaused == true -> musicResume(callback)
+            else -> callback?.invoke(
+                Result.failure(IllegalStateException("Nada está tocando. Pesquise uma música."))
+            )
+        }
+    }
+
+    fun searchMusic(query: String, callback: (Result<List<MusicSearchResult>>) -> Unit) {
+        val clean = query.trim()
+        if (clean.isBlank()) {
+            callback(Result.failure(IllegalArgumentException("Digite o nome da música.")))
+            return
+        }
+        if (!settings.isConfigured) {
+            callback(Result.failure(IllegalStateException("Configure o servidor do PC.")))
+            return
+        }
+        scope.launch {
+            val result = runCatching {
+                val encoded = java.net.URLEncoder.encode(clean, "UTF-8")
+                val json = musicRequest("/api/music/search?q=$encoded&filter=songs&limit=12")
+                val array = json.optJSONArray("results") ?: org.json.JSONArray()
+                buildList {
+                    for (index in 0 until array.length()) {
+                        val item = array.optJSONObject(index) ?: continue
+                        add(
+                            MusicSearchResult(
+                                id = item.optString("id"),
+                                type = item.optString("type"),
+                                title = item.optString("title"),
+                                artist = item.optString("artist"),
+                                album = item.optString("album"),
+                                durationMs = optLongOrNull(item, "duration_ms"),
+                                thumbnail = item.optString("thumbnail"),
+                            )
+                        )
+                    }
+                }
+            }
+            result.onFailure { error -> addLog("ERRO", "Busca musical: ${error.message}") }
+            mainHandler.post { callback(result) }
+        }
+    }
+
+    fun fetchMusicQueue(callback: (Result<List<MusicQueueItem>>) -> Unit) {
+        if (!settings.isConfigured) {
+            callback(Result.failure(IllegalStateException("Configure o servidor do PC.")))
+            return
+        }
+        scope.launch {
+            val result = runCatching {
+                val json = musicRequest("/api/music/queue")
+                val array = json.optJSONArray("queue") ?: org.json.JSONArray()
+                buildList {
+                    for (index in 0 until array.length()) {
+                        val item = array.optJSONObject(index) ?: continue
+                        add(
+                            MusicQueueItem(
+                                index = item.optInt("index", index),
+                                trackId = item.optString("track_id"),
+                                title = item.optString("title"),
+                                artist = item.optString("artist"),
+                                durationMs = optLongOrNull(item, "duration_ms"),
+                            )
+                        )
+                    }
+                }
+            }
+            mainHandler.post { callback(result) }
+        }
+    }
+
+    fun musicQueueAdd(trackId: String, callback: ((Result<MusicInfo>) -> Unit)? = null) {
+        musicCommand("/api/music/queue/add", JSONObject().put("track_id", trackId), callback)
+    }
+
+    fun musicQueueRemove(index: Int, callback: ((Result<MusicInfo>) -> Unit)? = null) {
+        musicCommand("/api/music/queue/remove", JSONObject().put("index", index), callback)
+    }
+
+    fun musicQueueClear(callback: ((Result<MusicInfo>) -> Unit)? = null) {
+        musicCommand("/api/music/queue/clear", JSONObject(), callback)
+    }
+
+    private fun optLongOrNull(json: JSONObject, key: String): Long? =
+        if (json.has(key) && !json.isNull(key)) json.optLong(key) else null
 
     private fun applyMedia(result: Result<MusicInfo>) {
         result.onSuccess { music ->
@@ -815,18 +996,38 @@ class BmoEngine private constructor(context: Context) {
         } else {
             null
         },
+        volumePercent = if (json.has("volume_percent") && !json.isNull("volume_percent")) {
+            json.optInt("volume_percent")
+        } else {
+            null
+        },
+        positionMs = json.optLong("position_ms", 0L).coerceAtLeast(0L),
+        durationMs = optLongOrNull(json, "duration_ms"),
+        queueLength = if (json.has("queue_length") && !json.isNull("queue_length")) {
+            json.optInt("queue_length")
+        } else {
+            null
+        },
+        verified = json.optBoolean("verified", false),
         artUrl = json.optString("art_url"),
     )
 
     /** Eventos de controle de mídia podem vir sem metadados; preserva o que já existe. */
     private fun mergeMusic(current: MusicInfo?, incoming: MusicInfo): MusicInfo {
         if (current == null || incoming.title.isNotBlank()) return incoming
+        // Estado parado é autoritativo: limpa a faixa antiga em vez de manter
+        // metadados obsoletos depois de stop/queue clear.
+        if (incoming.status.equals("stopped", ignoreCase = true)) return incoming
         return incoming.copy(
             title = current.title,
             artist = current.artist,
             album = current.album,
             lengthS = incoming.lengthS ?: current.lengthS,
             volume = incoming.volume ?: current.volume,
+            volumePercent = incoming.volumePercent ?: current.volumePercent,
+            durationMs = incoming.durationMs ?: current.durationMs,
+            queueLength = incoming.queueLength ?: current.queueLength,
+            verified = incoming.verified,
             artUrl = incoming.artUrl.ifBlank { current.artUrl },
         )
     }

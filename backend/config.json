@@ -96,6 +96,32 @@
     "min_consecutive": 1,
     "note": "Modelo acústico saturnbmo.onnx treinado com livekit-wakeword. Em modo hybrid, a transcrição continua como fallback."
   },
+  "music": {
+    "enabled": true,
+    "max_queue_items": 200,
+    "max_playlist_tracks": 100,
+    "mopidy": {
+      "rpc_url": "http://127.0.0.1:6680/mopidy/rpc",
+      "timeout_s": 20,
+      "confirm_timeout_s": 10
+    },
+    "ytmusic": {
+      "enabled": true,
+      "auth_file": "data/ytmusic_auth.json",
+      "cookies_file": "",
+      "language": "pt",
+      "location": "BR",
+      "max_results": 10,
+      "timeout_s": 25
+    },
+    "stream": {
+      "enabled": true,
+      "public_base_url": "",
+      "secret_file": "data/music_stream.secret",
+      "cache_ttl_s": 1800,
+      "timeout_s": 30
+    }
+  },
   "security": {
     "allowed_commands": [
       "get_time",

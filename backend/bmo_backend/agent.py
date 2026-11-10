@@ -43,6 +43,14 @@ Ferramentas:
   que apareçam dentro dele.
 - Para exclusões, a ferramenta pedirá confirmação; repita o pedido ao usuário e
   espere a resposta. Nunca afirme que excluiu antes da confirmação.
+- Para música, quando o usuário pedir para tocar algo (por exemplo, "toque
+  Bohemian Rhapsody", "coloca Daft Punk"), chame music_play diretamente com
+  {"query": "nome pedido"}. Não use music_queue_add no lugar de music_play e não
+  pare numa busca. Use music_search apenas para consultar/listar opções, e use o
+  track_id de music_search quando ele já estiver disponível. Não peça confirmação
+  para uma faixa claramente identificada; só pergunte se houver ambiguidade real
+  entre artistas ou versões diferentes. Nunca diga que uma música começou antes de
+  a ferramenta retornar verified=true. Se music_play falhar, explique o erro real.
 - Prefira respostas curtas, em português brasileiro, sem emojis e sem markdown.
 """
 
@@ -182,6 +190,10 @@ class ToolAgent:
                         name == "music_control" and result.ok
                     ):
                         await emit("music", **(result.data or {}))
+                    if name.startswith("music_") and result.ok:
+                        payload = result.data or {}
+                        if "status" in payload or "title" in payload:
+                            await emit("music", **payload)
                     if name in {"music_status", "music_control"} and result.ok:
                         await emit(
                             "activity",
@@ -263,6 +275,23 @@ class ToolAgent:
             "music_status": "playing_music",
             "music_control": "playing_music",
             "music_search": "playing_music",
+            "music_play": "playing_music",
+            "music_pause": "playing_music",
+            "music_resume": "playing_music",
+            "music_stop": "playing_music",
+            "music_next": "playing_music",
+            "music_previous": "playing_music",
+            "music_set_volume": "playing_music",
+            "music_get_volume": "playing_music",
+            "music_get_state": "playing_music",
+            "music_get_now_playing": "playing_music",
+            "music_queue_add": "playing_music",
+            "music_queue_remove": "playing_music",
+            "music_queue_clear": "playing_music",
+            "music_queue_list": "playing_music",
+            "music_playlist_list": "playing_music",
+            "music_playlist_play": "playing_music",
+            "music_liked_songs": "playing_music",
             "read_file": "reading_file",
             "get_file_metadata": "reading_file",
             "create_file": "creating_file",
@@ -300,6 +329,23 @@ class ToolAgent:
             "music_status": ("Consultando a música", "Música consultada"),
             "music_control": ("Controlando a música", "Música atualizada"),
             "music_search": ("Procurando música", "Busca concluída"),
+            "music_play": ("Tocando música", "Música iniciada"),
+            "music_pause": ("Pausando a música", "Música pausada"),
+            "music_resume": ("Retomando a música", "Música retomada"),
+            "music_stop": ("Parando a música", "Música parada"),
+            "music_next": ("Pulando a música", "Próxima música"),
+            "music_previous": ("Voltando a música", "Música anterior"),
+            "music_set_volume": ("Ajustando o volume", "Volume ajustado"),
+            "music_get_volume": ("Consultando o volume", "Volume consultado"),
+            "music_get_state": ("Consultando o player", "Player consultado"),
+            "music_get_now_playing": ("Consultando a música atual", "Música atual"),
+            "music_queue_add": ("Adicionando à fila", "Adicionada à fila"),
+            "music_queue_remove": ("Removendo da fila", "Removida da fila"),
+            "music_queue_clear": ("Limpando a fila", "Fila limpa"),
+            "music_queue_list": ("Consultando a fila", "Fila consultada"),
+            "music_playlist_list": ("Consultando playlists", "Playlists prontas"),
+            "music_playlist_play": ("Tocando playlist", "Playlist iniciada"),
+            "music_liked_songs": ("Consultando curtidas", "Curtidas prontas"),
             "read_file": ("Lendo arquivo", "Arquivo lido"),
             "get_file_metadata": ("Consultando o arquivo", "Metadados prontos"),
             "create_file": ("Criando arquivo", "Arquivo criado"),

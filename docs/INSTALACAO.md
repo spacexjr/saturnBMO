@@ -11,7 +11,7 @@ Você precisa de:
 3. Ollama com um modelo local.
 4. Faster-Whisper (instalado pelo `requirements.txt`; modelo baixado no primeiro uso).
 5. Piper com voz pt-BR **ou** espeak-ng como fallback.
-6. `playerctl`/`busctl` para MPRIS (BitChord) e `kdialog`/`zenity` para o seletor de pastas.
+6. Mopidy 4 para tocar YouTube Music; `playerctl`/`busctl` para MPRIS/BitChord (alternativa) e `kdialog`/`zenity` para o seletor de pastas.
 7. APK instalado no celular.
 8. Internet no PC para as ferramentas web e clima (opcional para conversa local).
 
@@ -24,7 +24,9 @@ O celular não precisa de internet, apenas de acesso ao PC. O celular também n�
 ```bash
 sudo dnf install python3 python3-pip python3-virtualenv ffmpeg espeak-ng \
   cmake gcc-c++ make git java-21-openjdk-devel android-tools \
-  playerctl kdialog zenity
+  playerctl kdialog zenity mopidy gstreamer1-plugins-good \
+  gstreamer1-plugins-bad-free gstreamer1-plugins-ugly-free \
+  gstreamer1-plugin-libav
 ```
 
 Ubuntu/Debian usam `playerctl`, `kdialog` (ou `zenity`), `openjdk-17-jdk`/`openjdk-21-jdk` e `adb`.
@@ -213,7 +215,45 @@ command -v kdialog || command -v zenity
 - `kdialog` (KDE) ou `zenity` abre o seletor nativo de pastas.
 - O seletor precisa de uma sessão gráfica (`DISPLAY` ou `WAYLAND_DISPLAY`).
 
-### BitChord 1.8
+### Música: Mopidy + YouTube Music
+
+O player principal é o Mopidy 4. Instale e configure uma vez:
+
+```bash
+mopidy --version
+mkdir -p ~/.config/mopidy
+cp docs/mopidy.conf.example ~/.config/mopidy/mopidy.conf
+systemctl --user enable --now mopidy
+```
+
+O exemplo escuta somente em `127.0.0.1:6680` e habilita a extensão `stream`.
+Confirme o JSON-RPC:
+
+```bash
+curl -sS -X POST http://127.0.0.1:6680/mopidy/rpc \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"core.get_version","params":{}}'
+```
+
+As dependências `ytmusicapi` e `yt-dlp` já são instaladas pelo
+`requirements.txt`. Busca e reprodução funcionam sem login; para playlists e
+músicas curtidas:
+
+```bash
+cd backend
+.venv/bin/ytmusicapi browser   # salve em data/ytmusic_auth.json
+chmod 600 data/ytmusic_auth.json
+```
+
+O arquivo de autenticação e cookies do yt-dlp nunca devem ir para o Git. O guia
+completo, API, ferramentas do LLM e limitações está em
+**[MUSICA.md](MUSICA.md)**.
+
+> Não instale `mopidy-ytmusic`: o último release exige Mopidy 3,
+> `pytube<13` e `ytmusicapi<0.30`, incompatível com o Mopidy 4. O BMO usa
+> `ytmusicapi` + `yt-dlp` mantendo o Mopidy como player.
+
+### BitChord 1.8 (alternativo)
 
 Abra o BitChord normalmente. O backend descobre o serviço `org.mpris.MediaPlayer2.bitchord` no barramento do usuário. Não é necessário instalar outro BitChord nem modificar o programa.
 

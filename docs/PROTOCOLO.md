@@ -126,7 +126,7 @@ Todos têm `type`, `seq` e `ts`, salvo indicação em contrário.
 | `assistant.text.delta` | `text`, `id` | Fragmento da resposta do LLM ou ação local. |
 | `assistant.text.done` | `text`, `id`, `audio_available` | Resposta completa. |
 | `activity` | `activity`, `status`, `label`, `tool?` | Operação real em andamento (`processing`, `searching_web`, `opening_app`, `editing_file`, `success`, `error` etc.). `status`: `start`, `done` ou `error`. |
-| `music` | `player`, `is_bitchord`, `status`, `title`, `artist`, `album`, `length_s`, `volume`, `art_url`, `capabilities` | Metadados reais do player MPRIS/BitChord. |
+| `music` | `player`, `is_bitchord`, `status`, `title`, `artist`, `album`, `length_s`, `volume`, `volume_percent`, `position_ms`, `duration_ms`, `queue_length`, `verified`, `art_url` | Metadados reais do Mopidy/YouTube Music (ou MPRIS/BitChord como alternativa). |
 | `confirmation.request` | `id`, `tool`, `prompt` | Ação destrutiva aguardando confirmação explícita. |
 | `confirmation.result` | `id`, `approved`, `ok`, `message` | Resultado da confirmação e da execução. |
 | `audio.start` | `id`, `assistant_id`, `format`, `sample_rate`, `channels`, `duration_ms`, `engine` | Início do áudio TTS; os binários seguem em sequência. |
@@ -216,12 +216,12 @@ O backend reconhece hora, data e clima antes de chamar o LLM. O LLM pode chamar 
 - arquivos: `list_files`, `search_files`, `read_file`, `create_file`, `write_file`, `edit_file`, `rename_file`, `copy_file`, `move_file`, `create_directory`, `delete_file`, `delete_directory`, `get_file_metadata`;
 - internet: `web_search`, `open_url`, `read_webpage`, `extract_page_content`, `summarize_web_content`;
 - aplicativos: `list_apps`, `launch_app`, `close_app`, `minimize_app`, `maximize_app`, `restore_app`, `foreground_app`, `list_windows`, `list_running_apps`;
-- mídia: `music_status`, `music_control`, `music_search`;
+- música: `music_search`, `music_play`, `music_pause`, `music_resume`, `music_stop`, `music_next`, `music_previous`, `music_set_volume`, `music_get_volume`, `music_get_state`, `music_get_now_playing`, `music_queue_add`, `music_queue_remove`, `music_queue_clear`, `music_queue_list`, `music_playlist_list`, `music_playlist_play`, `music_liked_songs` + MPRIS legado (`music_status`, `music_control`, `music_search`);
 - sistema: `system_info`.
 
 Cada ferramenta tem validação própria. Não há execução de shell arbitrário nem `sudo` automático. `delete_file` e `delete_directory` retornam `confirmation.request` e só executam após `confirmation` com `approved: true` (ou “sim” por voz/texto).
 
-As ferramentas de arquivo dependem de uma pasta autorizada em `backend/data/access.json`. Sem autorização, retornam erro. A integração com o BitChord usa apenas MPRIS; pesquisa de faixas por voz não é suportada pelo BitChord 1.8.
+As ferramentas de arquivo dependem de uma pasta autorizada em `backend/data/access.json`. Sem autorização, retornam erro. As ferramentas novas de música usam o Mopidy local e o YouTube Music (`ytmusicapi` + `yt-dlp`); o BitChord continua acessível por MPRIS nas ferramentas legadas.
 
 ## 7. HTTP
 
@@ -237,7 +237,17 @@ Endpoints auxiliares:
 | `POST` | `/api/v1/folder/select` | Bearer | Abre o seletor nativo no PC e autoriza a escolha. |
 | `POST` | `/api/v1/folder/revoke` | Bearer | Revoga o acesso à pasta. |
 | `GET` | `/api/v1/tools` | Bearer | Lista e estado das ferramentas registradas. |
-| `GET` | `/api/v1/media` | Bearer | Metadados MPRIS do player ativo; `503` se indisponível. |
+| `GET` | `/api/v1/media` | Bearer | Metadados MPRIS do player ativo; usa o Mopidy como fallback. |
+| `GET` | `/api/music/state` | Bearer | Estado real do Mopidy: status, faixa, posição, duração, volume e fila. |
+| `GET` | `/api/music/now-playing` | Bearer | Igual a `state`, com o campo `now_playing`. |
+| `GET` | `/api/music/queue` | Bearer | Fila real do Mopidy. |
+| `GET` | `/api/music/search?q=&filter=&limit=` | Bearer | Busca no YouTube Music. |
+| `GET` | `/api/music/playlists` | Bearer | Playlists da conta autenticada. |
+| `POST` | `/api/music/play` | Bearer | `{"track_id":"..."}`, confirma a reprodução no Mopidy. |
+| `POST` | `/api/music/{pause,resume,stop,next,previous}` | Bearer | Transporte com confirmação de estado. |
+| `POST` | `/api/music/volume` | Bearer | `{"volume":0..100}`. |
+| `POST` | `/api/music/queue/{add,remove,clear}` | Bearer | Manipula a fila. |
+| `GET/HEAD` | `/api/music/stream/{video_id}?sig=...` | HMAC | Proxy de áudio consumido pelo Mopidy local. |
 | `POST` | `/api/v1/text` | Bearer | Resposta por texto; pode gerar WAV em cache. |
 | `GET` | `/api/v1/audio/{id}.wav` | Bearer | Baixa áudio TTS em cache (TTL de 300 s). |
 | `POST` | `/api/v1/reset?session_id=...` | Bearer | Apaga histórico de uma sessão HTTP. |

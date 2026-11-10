@@ -129,6 +129,38 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "Em modo hybrid, a transcrição continua como fallback."
         ),
     },
+    "music": {
+        # YouTube Music (busca/biblioteca) + Mopidy (player/fila) + proxy local.
+        "enabled": True,
+        "max_queue_items": 200,
+        "max_playlist_tracks": 100,
+        "mopidy": {
+            # Mantenha o Mopidy escutando apenas em 127.0.0.1.
+            "rpc_url": "http://127.0.0.1:6680/mopidy/rpc",
+            "timeout_s": 20,
+            "confirm_timeout_s": 10,
+        },
+        "ytmusic": {
+            "enabled": True,
+            # Arquivo browser.json gerado por `ytmusicapi browser` (fora do Git).
+            "auth_file": "data/ytmusic_auth.json",
+            # Opcional: cookies do yt-dlp para faixas restritas (fora do Git).
+            "cookies_file": "",
+            "language": "pt",
+            "location": "BR",
+            "max_results": 10,
+            "timeout_s": 25,
+        },
+        "stream": {
+            "enabled": True,
+            # Vazio = http://127.0.0.1:<server.port>. Use o IP do PC se o Mopidy
+            # estiver em outra máquina (não recomendado).
+            "public_base_url": "",
+            "secret_file": "data/music_stream.secret",
+            "cache_ttl_s": 1800,
+            "timeout_s": 30,
+        },
+    },
     "security": {
         "allowed_commands": ["get_time", "get_date"],
         "max_text_chars": 1000,
@@ -229,6 +261,14 @@ def load_config(config_file: str | Path | None = None) -> dict[str, Any]:
         ("wakeword", "acoustic_model"): "BMO_WAKEWORD_MODEL",
         ("wakeword", "threshold"): "BMO_WAKEWORD_THRESHOLD",
         ("tools", "enabled"): "BMO_TOOLS_ENABLED",
+        ("music", "enabled"): "BMO_MUSIC_ENABLED",
+        ("music", "mopidy", "rpc_url"): "BMO_MOPIDY_RPC_URL",
+        ("music", "ytmusic", "enabled"): "BMO_YTMUSIC_ENABLED",
+        ("music", "ytmusic", "auth_file"): "BMO_YTMUSIC_AUTH_FILE",
+        ("music", "ytmusic", "cookies_file"): "BMO_YTMUSIC_COOKIES_FILE",
+        ("music", "ytmusic", "language"): "BMO_YTMUSIC_LANGUAGE",
+        ("music", "ytmusic", "location"): "BMO_YTMUSIC_LOCATION",
+        ("music", "stream", "public_base_url"): "BMO_MUSIC_STREAM_BASE_URL",
     }
     for path, env_name in env_map.items():
         value = os.environ.get(env_name)
@@ -295,6 +335,9 @@ def resolve_runtime_paths(config: dict[str, Any]) -> None:
         ("wakeword", "mel_model"),
         ("wakeword", "embedding_model"),
         ("tools", "access_file"),
+        ("music", "ytmusic", "auth_file"),
+        ("music", "ytmusic", "cookies_file"),
+        ("music", "stream", "secret_file"),
     ):
         *section, key = path
         target = config

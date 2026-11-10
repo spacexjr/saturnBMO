@@ -1,0 +1,44 @@
+# Exemplo de configuração do Mopidy para o SaturnBMO no Nobara/Fedora.
+# Copie para ~/.config/mopidy/mopidy.conf.
+#
+# O Mopidy é apenas o player local: ele recebe URLs assinadas em
+# http://127.0.0.1:<porta do backend>/api/music/stream/... e toca o áudio.
+# Não habilite o plugin mopidy-ytmusic: ele exige Mopidy 3 e é incompatível
+# com o Mopidy 4 usado pelo BMO.
+
+[core]
+cache_dir = ~/.cache/mopidy
+config_dir = ~/.config/mopidy
+data_dir = ~/.local/share/mopidy
+
+[logging]
+verbosity = 1
+
+[audio]
+# Ajuste se preferir controlar o volume pelo mixer do sistema.
+mixer = software
+mixer_volume = 70
+output = autoaudiosink
+buffer_time = 500
+
+[softwaremixer]
+enabled = true
+
+[http]
+enabled = true
+# NUNCA use 0.0.0.0: a API do Mopidy não tem autenticação.
+hostname = 127.0.0.1
+port = 6680
+csrf_protection = false
+
+[stream]
+# Necessário para o Mopidy consumir a URL assinada do backend.
+enabled = true
+timeout = 60
+
+# Não precisamos de biblioteca local nem de playlists M3U para o YouTube Music.
+[file]
+enabled = false
+
+[m3u]
+enabled = false

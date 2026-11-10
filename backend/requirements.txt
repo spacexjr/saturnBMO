@@ -5,3 +5,5 @@ websockets>=12
 numpy>=1.26
 onnxruntime>=1.17
 faster-whisper>=1.0
+ytmusicapi>=1.10,<2
+yt-dlp>=2025.1

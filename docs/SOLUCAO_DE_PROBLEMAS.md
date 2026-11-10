@@ -180,11 +180,28 @@ cd backend
 - Se o log mostrar `Carregando Faster-Whisper ../tools/whisper-models/ggml-base.bin`, há um `BMO_STT_MODEL` antigo em `backend/.env` sobrescrevendo o `config.json` (o `run.sh` carrega esse arquivo). Deixe `BMO_STT_MODEL=` em branco ou use `medium`/`small`.
 - Para testar o fallback whisper.cpp, confira `tools/whisper.cpp/build/bin/whisper-cli` e `tools/whisper-models/ggml-base.bin`. Ele é opcional; sem esses arquivos, o Faster-Whisper continua funcionando.
 
-## A música não atualiza ou não despausa
+## A música não toca, não atualiza ou não despausa
 
-- O app consulta `/api/v1/media` a cada **4 s** enquanto está conectado; não é preciso pedir “qual música está tocando”.
-- Ações em português como `despausar`, `retomar`, `tocar`, `pausar`, `próxima` e `anterior` são aceitas. Se o player só implementar `PlayPause`, o backend usa esse método como fallback seguro.
-- **Pesquisar e tocar uma faixa por nome não é possível** no BitChord 1.8 via MPRIS: a capacidade `search` é `false`. O BMO informa essa limitação; abra o BitChord e escolha a faixa manualmente.
+O player principal é o Mopidy. Verifique na ordem:
+
+```bash
+mopidy --version
+systemctl --user status mopidy
+curl -sS -X POST http://127.0.0.1:6680/mopidy/rpc \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"core.get_version","params":{}}'
+```
+
+- O app consulta `/api/music/state` a cada **4 s**; `/api/v1/media` continua como fallback.
+- Se o Mopidy não responder, inicie-o: `systemctl --user start mopidy`.
+- Confirme que `hostname = 127.0.0.1` e `port = 6680` em `~/.config/mopidy/mopidy.conf`.
+- Confirme que a extensão `[stream]` está habilitada. Sem ela, o Mopidy não abre a URL assinada do backend.
+- Erros de áudio no Mopidy podem indicar falta de plugins do GStreamer. Instale `gstreamer1-plugins-good`, `gstreamer1-plugins-bad-free`, `gstreamer1-plugins-ugly-free` e `gstreamer1-plugin-libav`.
+- Se a busca funciona mas a reprodução falha, atualize o resolvedor: `cd backend && .venv/bin/pip install -U yt-dlp`.
+- Faixas restritas podem exigir cookies: configure `BMO_YTMUSIC_COOKIES_FILE`.
+- Rode o teste automatizado: `cd backend && .venv/bin/python -m pytest tests/test_music.py -q`.
+- O BMO não inventa sucesso: se a API devolver HTTP 409, o Mopidy não confirmou a faixa. Leia o campo `state` da resposta.
+- **Pesquisar e tocar uma faixa por nome não é possível** no BitChord 1.8 via MPRIS; para isso use a integração Mopidy + YouTube Music.
 
 ## As ferramentas não abrem aplicativos / janelas
 

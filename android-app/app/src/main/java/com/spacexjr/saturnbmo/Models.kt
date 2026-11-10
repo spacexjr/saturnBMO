@@ -109,7 +109,7 @@ data class ActivityInfo(
     val tool: String = "",
 )
 
-/** Metadados reais do player MPRIS (BitChord e outros) enviados pelo PC. */
+/** Metadados reais do player (Mopidy/YouTube Music) enviados pelo PC. */
 data class MusicInfo(
     val player: String = "",
     val isBitchord: Boolean = false,
@@ -119,11 +119,42 @@ data class MusicInfo(
     val album: String = "",
     val lengthS: Double? = null,
     val volume: Float? = null,
+    val volumePercent: Int? = null,
+    val positionMs: Long = 0L,
+    val durationMs: Long? = null,
+    val queueLength: Int? = null,
+    val verified: Boolean = false,
     val artUrl: String = "",
 ) {
     val isPlaying: Boolean get() = status.equals("playing", ignoreCase = true)
+    val isPaused: Boolean get() = status.equals("paused", ignoreCase = true)
     val active: Boolean get() = title.isNotBlank() || player.isNotBlank()
+    val progress: Float
+        get() {
+            val total = durationMs ?: (lengthS?.times(1000)?.toLong() ?: 0L)
+            return if (total > 0L) (positionMs.toFloat() / total).coerceIn(0f, 1f) else 0f
+        }
 }
+
+/** Resultado de busca do YouTube Music. */
+data class MusicSearchResult(
+    val id: String = "",
+    val type: String = "",
+    val title: String = "",
+    val artist: String = "",
+    val album: String = "",
+    val durationMs: Long? = null,
+    val thumbnail: String = "",
+)
+
+/** Item da fila real do Mopidy. */
+data class MusicQueueItem(
+    val index: Int = 0,
+    val trackId: String = "",
+    val title: String = "",
+    val artist: String = "",
+    val durationMs: Long? = null,
+)
 
 data class ConfirmationInfo(
     val id: String = "",

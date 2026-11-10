@@ -1,6 +1,123 @@
 # Evidências de teste
 
-Registro do que foi realmente executado. As seções históricas abaixo são de **2026-10-28**; a atualização de **2026-11-08** registra o estado atual (Faster-Whisper, ferramentas e testes novos).
+Registro do que foi realmente executado. As seções históricas abaixo são de **2026-10-28**; a atualização de **2026-11-08** cobre Faster-Whisper e ferramentas; a de **2026-11-10** cobre a integração musical.
+
+## Atualização 2026-11-10 — música real
+
+### Testes automatizados
+
+```text
+backend: 98 passed (22 em tests/test_music.py)
+android: BUILD SUCCESSFUL + testes unitários existentes passando
+```
+
+Os 22 testes de música cobrem configuração, cliente JSON-RPC (incluindo
+`core.mixer` do Mopidy 4 e `get_tl_tracks`), busca, normalização, play/pause/
+resume/stop, volume, fila, playlists, ferramentas do LLM, aliases de argumentos
+gerados por modelos pequenos, API autenticada, proxy assinado e falhas de
+confirmação.
+
+### Mopidy real
+
+Ambiente: Mopidy **4.0.0a15** em `127.0.0.1:6681`, saída `fakesink sync=true`,
+áudio WAV local servido em `127.0.0.1:8099`.
+
+```text
+PASS mopidy reachable (4.0.0a15)
+PASS play verified + faixa correta
+PASS state com position_ms
+PASS pause / resume
+PASS volume set/get 37%
+PASS queue add/list (2 faixas)
+PASS next mudou para a faixa 2
+PASS previous voltou para a faixa 1
+PASS stop
+PASS queue remove/clear
+RESULTADO: todos os comandos foram confirmados pelo Mopidy real.
+```
+
+Esse teste expôs e corrigiu dois problemas reais de Mopidy 4:
+
+- volume mudou de `core.playback.*` para `core.mixer.*`; o cliente agora usa
+  `core.mixer` com fallback para Mopidy 3;
+- `core.tracklist.get_tracks` devolve `Track` sem `tlid`; a fila agora usa
+  `core.tracklist.get_tl_tracks` e achata `tlid` + `track`.
+
+### YouTube Music real e API completa
+
+Fluxo executado com o backend real em `127.0.0.1:8765`, Mopidy real e
+`ytmusicapi`/`yt-dlp` reais:
+
+```text
+GET  /api/music/search?q=daft+punk+one+more+time  -> 200, 3 resultados
+POST /api/music/play  {"track_id":"n6RTF4OPzf8"}  -> 200, playing, verified=true
+GET  /api/music/state                              -> 200, title real
+POST /api/music/queue/add                          -> 200, fila=2
+POST /api/music/next                               -> 200, faixa mudou, verified=true
+POST /api/music/previous                           -> 200, faixa voltou, verified=true
+POST /api/music/volume {"volume":33}               -> 200, volume=33
+POST /api/music/stop                               -> 200, stopped, verified=true
+POST /api/music/queue/clear                        -> 200
+```
+
+O Mopidy consumiu a URL assinada local, o proxy resolveu o áudio com `yt-dlp`
+e a reprodução foi confirmada por `status=playing` + `videoId` correspondente.
+Também foi validado que o primeiro `play` pode ultrapassar 8 s enquanto o
+`yt-dlp` resolve; o timeout do Mopidy foi elevado para 20 s e um timeout no RPC
+de `play` não é tratado como sucesso: o backend continua conferindo o estado
+real.
+
+### Correções encontradas durante os testes reais
+
+- `StreamResolver` lia `cookies_file` de `StreamConfig`, mas o valor vinha de
+  `YtMusicConfig`; o campo foi adicionado e a herança corrigida.
+- O arquivo de autenticação ausente impedia até a busca anônima. Agora ele é
+  opcional e a busca cai para o modo anônimo; biblioteca pessoal continua
+  exigindo login.
+- `POST /api/music/stop` e as rotas de fila usadas pelo Android não existiam;
+  foram adicionadas.
+- `next`/`previous` só retornam sucesso depois de confirmar que o `videoId`
+  mudou. No fim da fila, `next` retorna “Fim da fila” apenas quando o Mopidy
+  está realmente `stopped`; não há troca de faixa inventada.
+
+### Agente real (WebSocket + Ollama/Qwen3)
+
+Pedido enviado por texto no WebSocket real, com o backend real, Mopidy real,
+YouTube Music real e Ollama real:
+
+```text
+usuário: "toque Bohemian Rhapsody"
+activity: music_play start -> Tocando música
+music: status=playing, verified=true
+activity: music_play done -> Música iniciada
+resposta final em português, sem afirmar nada antes da confirmação
+```
+
+A faixa escolhida pelo YouTube Music foi
+`Queen - Bohemian Rhapsody (Live HD) Legendado em PT-BR`. O `music_play` agora
+aceita `query` diretamente, então o modelo não precisa encadear duas chamadas
+nem escolher `music_queue_add` por engano. Os testes também aceitam os aliases
+de argumentos mais comuns (`id`, `type`, `level`). Antes desse ajuste, numa
+execução real o modelo chamou `music_queue_add` em vez de `music_play`; o
+comportamento foi corrigido e revalidado com a execução acima.
+
+### Android
+
+O app passou a consultar `/api/music/state` a cada 4 s (com fallback para
+`/api/v1/media`), exibe título/artista/progresso/volume/fila e envia comandos
+`play`, `pause`, `resume`, `stop`, `next`, `previous`, `volume`, busca e fila
+com o token. O build foi executado com JDK 21 (o ambiente só tinha JRE 25):
+
+```text
+JAVA_HOME=/tmp/opencode/jdk/jdk-21.0.13+9 ./gradlew testDebugUnitTest
+BUILD SUCCESSFUL
+```
+
+### Pendente
+
+- Validação do APK em um celular físico.
+- Teste de faixas restritas por idade/região com cookies reais.
+- Teste de playlists/curtidas com uma conta autenticada real.
 
 ## Atualização 2026-11-08
 

@@ -10,7 +10,8 @@ O celular Android é a interface: mostra o rosto do BMO em paisagem, captura o m
 
 - Rosto do BMO ocupando a tela inteira, em paisagem, sem barras do sistema.
 - Cenas procedurais 8-bit desenhadas sobre os PNGs originais: clima, astronomia, matemática, ciência e música.
-- Música real do BitChord 1.8 via MPRIS: título, artista, estado e waveform/equalizador.
+- **Música real com Mopidy + YouTube Music**: busca, reprodução, pausa, próxima/anterior, parar, volume, fila, playlists e músicas curtidas. Título, artista, posição, duração e fila vêm do player real; o BitChord 1.8 continua disponível via MPRIS como alternativa.
+- Controles de música no app Android e por voz, com confirmação do Mopidy antes de o BMO afirmar que a música começou.
 - Indicadores procedurais das operações reais: pesquisando, lendo, abrindo/fechando app, arquivos, sistema, confirmação, sucesso e erro.
 - Controles escondidos: toque no rosto mostra/oculta; toque longo abre os ajustes.
 - Microfone PCM 16 kHz mono, em blocos de 20 ms, com VAD por energia no PC.
@@ -21,7 +22,8 @@ O celular Android é a interface: mostra o rosto do BMO em paisagem, captura o m
 - Voz local com Piper (pt-BR) e fallback para espeak-ng.
 - Internet: `web_search`, `open_url`, `read_webpage`, `extract_page_content` e `summarize_web_content`.
 - Controle de aplicativos no KDE/Nobara: listar, abrir, fechar, minimizar, maximizar, restaurar e trazer para frente.
-- BitChord 1.8 via MPRIS/D-Bus: play, pause, próxima, anterior, parar e volume. Pesquisa de faixas não é exposta pelo MPRIS.
+- Ferramentas de música para o LLM: `music_search`, `music_play`, `music_pause`, `music_resume`, `music_stop`, `music_next`, `music_previous`, `music_set_volume`, `music_get_volume`, `music_get_state`, `music_get_now_playing`, `music_queue_*`, `music_playlist_*` e `music_liked_songs`.
+- BitChord 1.8 via MPRIS/D-Bus preservado como player alternativo: play, pause, próxima, anterior, parar e volume.
 - Arquivos confinados a uma pasta autorizada, escolhida por seletor nativo (`kdialog`/`zenity`): listar, buscar, ler, criar, editar, renomear, copiar, mover, excluir e metadados.
 - Exclusões exigem confirmação explícita no app ou por voz/texto.
 - Informações do sistema (CPU, memória, disco, uptime etc.) sem shell arbitrário.
@@ -41,6 +43,7 @@ O celular Android é a interface: mostra o rosto do BMO em paisagem, captura o m
 │  AudioTrack streaming       │                            │  Wakeword ONNX + transcrição     │
 │  Android Keystore (token)   │                            │  Ollama (LLM + ferramentas)      │
 │  Serviço em 1º plano        │                            │  Piper / espeak-ng (TTS)         │
+│  Mopidy + YouTube Music          │
 │                             │       UDP 8766             │  MPRIS, XDG, arquivos, internet  │
 └─────────────────────────────┘                            └──────────────────────────────────┘
 ```
@@ -56,7 +59,9 @@ O celular não executa LLM nem STT. As ferramentas locais são expostas ao model
 - [Ollama](https://ollama.com/) com um modelo local; o padrão do repositório é `qwen3:8b`.
 - [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper) (instalado via `requirements.txt`; o modelo é baixado no primeiro uso).
 - [Piper](https://github.com/rhasspy/piper) com voz `pt_BR-faber-medium.onnx`; `espeak-ng` como fallback.
-- `playerctl` e/ou `busctl` para MPRIS/BitChord.
+- [Mopidy 4](https://mopidy.com/) rodando em `127.0.0.1:6680` para música do YouTube Music; veja [docs/MUSICA.md](docs/MUSICA.md).
+- `ytmusicapi` e `yt-dlp` (já em `backend/requirements.txt`). Busca e reprodução funcionam sem login; playlists/curtidas exigem `ytmusicapi browser`.
+- `playerctl` e/ou `busctl` para MPRIS/BitChord (alternativa).
 - `kdialog` (KDE) ou `zenity` para o seletor nativo de pastas.
 - Portas `8765/tcp` e `8766/udp` liberadas na rede local.
 - Internet no PC apenas para as ferramentas web. Clima usa Open-Meteo.
@@ -100,11 +105,28 @@ Saída esperada: API em `http://0.0.0.0:8765` e descoberta UDP na porta 8766. O 
 cat backend/data/token
 ```
 
-### 2. Autorizar uma pasta no PC
+### 2. Ativar a música (Mopidy + YouTube Music)
+
+Instale e configure o Mopidy uma única vez:
+
+```bash
+sudo dnf install mopidy gstreamer1-plugins-good gstreamer1-plugins-bad-free ffmpeg
+mkdir -p ~/.config/mopidy
+cp docs/mopidy.conf.example ~/.config/mopidy/mopidy.conf
+systemctl --user enable --now mopidy
+```
+
+Mantenha o Mopidy em `127.0.0.1:6680`. O backend fala com ele por JSON-RPC e
+o app usa somente a API autenticada do BMO. Busca e reprodução do YouTube Music
+funcionam sem login; para playlists e músicas curtidas, gere
+`backend/data/ytmusic_auth.json` com `cd backend && .venv/bin/ytmusicapi browser`.
+Passo a passo completo, segurança e limitações em **[docs/MUSICA.md](docs/MUSICA.md)**.
+
+### 3. Autorizar uma pasta no PC
 
 No app: **Ajustes → Pasta de acesso do BMO → Escolher pasta no PC**. O seletor nativo abre na tela do PC. A escolha fica em `backend/data/access.json` e pode ser revogada a qualquer momento. Sem pasta autorizada, as ferramentas de arquivo recusam todas as operações.
 
-### 3. Gerar e instalar o APK
+### 4. Gerar e instalar o APK
 
 ```bash
 ./scripts/build_android.sh debug
@@ -113,7 +135,7 @@ adb install -r android-app/app/build/outputs/apk/debug/app-debug.apk
 
 Para release assinado, veja [Build](#build).
 
-### 4. Configurar no celular
+### 5. Configurar no celular
 
 1. Abra o app. A tela deve mostrar somente o rosto do BMO.
 2. Toque no rosto e em **⚙ Ajustes** (ou toque e segure).
@@ -145,6 +167,8 @@ adb shell am start -n com.spacexjr.saturnbmo.debug/com.spacexjr.saturnbmo.MainAc
 - **Rosto somente:** o app abre sem botões. Toque no rosto para revelar os controles.
 - **Falar agora:** ativa o microfone e ignora a palavra de ativação uma vez.
 - **Digitar:** conversa por texto, útil se o microfone ou o TTS falharem.
+- **Música:** toque em **Música** para buscar no YouTube Music, tocar ou adicionar à fila. Quando algo está tocando, aparece uma barra com título, progresso, volume e botões de anterior, play/pause, próxima e parar.
+- **Música por voz:** peça, por exemplo, “toque Legião Urbana”, “pause a música”, “aumente o volume para 40” ou “qual está tocando?”. O BMO só confirma depois de consultar o Mopidy.
 - **Confirmação:** exclusões mostram um diálogo com **Confirmar** e **Cancelar**; também é possível responder “sim” ou “não” por voz/texto.
 - **Parar fala:** interrompe a reprodução e a resposta em andamento.
 - **Testar alto-falante/microfone:** tom de 440 Hz e medidor local de nível.

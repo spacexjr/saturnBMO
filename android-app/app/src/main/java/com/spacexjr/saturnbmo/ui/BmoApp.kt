@@ -151,6 +151,14 @@ fun BmoApp(engine: BmoEngine) {
                 onInterrupt = { engine.interrupt() },
                 onSendText = { engine.sendText(it) },
                 onConfirmation = { approved -> engine.respondConfirmation(approved) },
+                onMusicToggle = { engine.musicTogglePlayback() },
+                onMusicNext = { engine.musicNext() },
+                onMusicPrevious = { engine.musicPrevious() },
+                onMusicStop = { engine.musicStop() },
+                onMusicVolume = { engine.musicSetVolume(it) },
+                onMusicSearch = { query, callback -> engine.searchMusic(query, callback) },
+                onMusicPlay = { engine.musicPlay(it) },
+                onMusicQueueAdd = { engine.musicQueueAdd(it) },
             )
 
             Screen.SETTINGS -> Box(

@@ -7,6 +7,17 @@ backend/data/token
 backend/data/access.json
 backend/data/*.log
 backend/data/*.log.*
+# Credenciais e segredos da integração musical
+backend/data/ytmusic_auth.json
+backend/data/ytmusic_oauth.json
+backend/data/oauth.json
+backend/data/browser.json
+backend/data/cookies.txt
+backend/data/*cookies*.txt
+backend/data/music_stream.secret
+**/browser.json
+**/oauth.json
+**/cookies.txt
 *.egg-info/
 
 # Android / Gradle

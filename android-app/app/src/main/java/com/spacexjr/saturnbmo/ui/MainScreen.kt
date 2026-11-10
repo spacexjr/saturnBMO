@@ -17,15 +17,19 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -53,6 +57,8 @@ import com.spacexjr.saturnbmo.AppSettings
 import com.spacexjr.saturnbmo.BmoState
 import com.spacexjr.saturnbmo.BmoUiState
 import com.spacexjr.saturnbmo.ConnectionState
+import com.spacexjr.saturnbmo.MusicInfo
+import com.spacexjr.saturnbmo.MusicSearchResult
 import kotlin.math.abs
 import kotlin.math.sin
 
@@ -72,9 +78,18 @@ fun MainScreen(
     onInterrupt: () -> Unit,
     onSendText: (String) -> Unit,
     onConfirmation: (Boolean) -> Unit,
+    onMusicToggle: () -> Unit,
+    onMusicNext: () -> Unit,
+    onMusicPrevious: () -> Unit,
+    onMusicStop: () -> Unit,
+    onMusicVolume: (Int) -> Unit,
+    onMusicSearch: (String, (Result<List<MusicSearchResult>>) -> Unit) -> Unit,
+    onMusicPlay: (String) -> Unit,
+    onMusicQueueAdd: (String) -> Unit,
 ) {
     var showControls by remember { mutableStateOf(false) }
     var showTextDialog by remember { mutableStateOf(false) }
+    var showMusicDialog by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
@@ -114,9 +129,24 @@ fun MainScreen(
                 onActivate = onActivate,
                 onInterrupt = onInterrupt,
                 onText = { showTextDialog = true },
+                onMusic = { showMusicDialog = true },
                 onHide = { showControls = false },
+                onMusicToggle = onMusicToggle,
+                onMusicNext = onMusicNext,
+                onMusicPrevious = onMusicPrevious,
+                onMusicStop = onMusicStop,
+                onMusicVolume = onMusicVolume,
             )
         }
+    }
+
+    if (showMusicDialog) {
+        MusicSearchDialog(
+            onDismiss = { showMusicDialog = false },
+            onSearch = onMusicSearch,
+            onPlay = { showMusicDialog = false; onMusicPlay(it) },
+            onQueueAdd = onMusicQueueAdd,
+        )
     }
 
     if (showTextDialog) {
@@ -165,7 +195,13 @@ private fun FaceOverlay(
     onActivate: () -> Unit,
     onInterrupt: () -> Unit,
     onText: () -> Unit,
+    onMusic: () -> Unit,
     onHide: () -> Unit,
+    onMusicToggle: () -> Unit,
+    onMusicNext: () -> Unit,
+    onMusicPrevious: () -> Unit,
+    onMusicStop: () -> Unit,
+    onMusicVolume: (Int) -> Unit,
 ) {
     Box(Modifier.fillMaxSize()) {
         Row(
@@ -200,6 +236,18 @@ private fun FaceOverlay(
                 .padding(horizontal = 18.dp, vertical = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            ui.music?.takeIf { it.active }?.let { music ->
+                MusicBar(
+                    music = music,
+                    onToggle = onMusicToggle,
+                    onNext = onMusicNext,
+                    onPrevious = onMusicPrevious,
+                    onStop = onMusicStop,
+                    onVolume = onMusicVolume,
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+
             if (ui.transcript.isNotBlank() || ui.assistantText.isNotBlank()) {
                 Surface(
                     color = BmoPanel.copy(alpha = 0.96f),
@@ -287,6 +335,12 @@ private fun FaceOverlay(
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(16.dp),
                 ) { Text("Digitar") }
+                OutlinedButton(
+                    onClick = onMusic,
+                    enabled = ui.connected,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(16.dp),
+                ) { Text("Música") }
                 Button(
                     onClick = {
                         when {
@@ -431,6 +485,178 @@ fun LevelMeter(level: Float, modifier: Modifier = Modifier) {
             )
         }
     }
+}
+
+@Composable
+private fun MusicBar(
+    music: MusicInfo,
+    onToggle: () -> Unit,
+    onNext: () -> Unit,
+    onPrevious: () -> Unit,
+    onStop: () -> Unit,
+    onVolume: (Int) -> Unit,
+) {
+    Surface(
+        color = BmoPanel.copy(alpha = 0.97f),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        music.title.ifBlank { "Música" },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = BmoInk,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        listOfNotNull(
+                            music.artist.takeIf { it.isNotBlank() },
+                            if ((music.queueLength ?: 0) > 0) "fila: ${music.queueLength}" else null,
+                        ).joinToString(" • "),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = BmoInkSoft,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Text(
+                    text = when {
+                        music.isPlaying -> "TOCANDO"
+                        music.isPaused -> "PAUSADO"
+                        else -> "PARADO"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (music.isPlaying) BmoInk else BmoInkSoft,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .background(BmoInkSoft.copy(alpha = 0.25f), RoundedCornerShape(3.dp))
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(music.progress)
+                        .height(4.dp)
+                        .background(BmoInk, RoundedCornerShape(3.dp))
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onPrevious) { Text("⏮") }
+                TextButton(onClick = onToggle) { Text(if (music.isPlaying) "⏸" else "▶") }
+                TextButton(onClick = onNext) { Text("⏭") }
+                TextButton(onClick = onStop) { Text("⏹") }
+                Spacer(Modifier.weight(1f))
+                val volume = music.volumePercent ?: ((music.volume ?: 0f) * 100).toInt()
+                TextButton(onClick = { onVolume((volume - 5).coerceAtLeast(0)) }) { Text("−") }
+                Text(
+                    "${volume.coerceIn(0, 100)}%",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = BmoInkSoft,
+                )
+                TextButton(onClick = { onVolume((volume + 5).coerceAtMost(100)) }) { Text("+") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MusicSearchDialog(
+    onDismiss: () -> Unit,
+    onSearch: (String, (Result<List<MusicSearchResult>>) -> Unit) -> Unit,
+    onPlay: (String) -> Unit,
+    onQueueAdd: (String) -> Unit,
+) {
+    var query by remember { mutableStateOf("") }
+    var results by remember { mutableStateOf<List<MusicSearchResult>>(emptyList()) }
+    var searching by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    fun runSearch() {
+        if (query.isBlank() || searching) return
+        searching = true
+        error = null
+        onSearch(query) { result ->
+            searching = false
+            result.onSuccess { results = it }
+            result.onFailure { error = it.message ?: "Falha na busca." }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("YouTube Music") },
+        text = {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { if (it.length <= 200) query = it },
+                        label = { Text("Música ou artista") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = ::runSearch, enabled = !searching && query.isNotBlank()) {
+                        Text(if (searching) "..." else "Buscar")
+                    }
+                }
+                error?.let {
+                    Text(it, color = BmoError, style = MaterialTheme.typography.bodyMedium)
+                }
+                if (results.isEmpty() && !searching) {
+                    Text(
+                        "Pesquise uma música para tocar ou adicionar à fila.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = BmoInkSoft,
+                        modifier = Modifier.padding(top = 10.dp),
+                    )
+                }
+                LazyColumn(Modifier.heightIn(max = 300.dp)) {
+                    items(results, key = { it.id }) { item ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    item.title,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = BmoInk,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    listOf(
+                                        item.artist,
+                                        formatDuration(item.durationMs),
+                                    ).filter { it.isNotBlank() }.joinToString(" • "),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = BmoInkSoft,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            TextButton(onClick = { onQueueAdd(item.id) }) { Text("+ fila") }
+                            TextButton(onClick = { onPlay(item.id) }) { Text("Tocar") }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Fechar") } },
+    )
+}
+
+private fun formatDuration(durationMs: Long?): String {
+    if (durationMs == null || durationMs <= 0) return ""
+    val total = durationMs / 1000
+    return "%d:%02d".format(total / 60, total % 60)
 }
 
 @Composable

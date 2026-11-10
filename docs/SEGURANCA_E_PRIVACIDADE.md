@@ -90,7 +90,8 @@ O LLM pode chamar apenas ferramentas registradas pelo backend, com validação d
 - **Exclusão:** `delete_file` e `delete_directory` não executam na primeira chamada. O backend envia `confirmation.request`; a ação só ocorre após `confirmation` com `approved: true` (ou “sim” por voz/texto). Mudar de assunto cancela.
 - **Internet:** `web_search`, `open_url`, `read_webpage`, `extract_page_content` e `summarize_web_content`. Conteúdo de páginas é tratado como não confiável (possível prompt injection). URLs privadas/loopback são bloqueadas por padrão (`tools.allow_private_urls=false`). O modelo não tem acesso livre à rede.
 - **Aplicativos:** abrir, fechar, minimizar, maximizar, restaurar e listar apps/janelas usando `.desktop`, XDG, Flatpak, AppImage e mecanismos do ambiente KDE. Processos críticos são protegidos. Em Wayland, algumas operações de janela podem ser recusadas pelo compositor.
-- **Mídia:** apenas MPRIS/D-Bus. O BitChord não é modificado nem reinstalado. Pesquisa de faixas não é exposta pelo BitChord 1.8.
+- **Música:** Mopidy roda apenas em `127.0.0.1` e é controlado por JSON-RPC local. O token do Android protege a API `/api/music/*`; o proxy de áudio usa URL assinada por HMAC-SHA256, sem abrir a porta do Mopidy para a rede. Busca/biblioteca usam `ytmusicapi` e o áudio é resolvido por `yt-dlp`. Credenciais (`ytmusic_auth.json`, cookies) ficam em `backend/data/`, com permissão restrita e fora do Git. O LLM não escolhe comandos de shell nem URLs arbitrárias de áudio.
+- **Mídia MPRIS/BitChord:** mantida como alternativa via D-Bus. O BitChord não é modificado nem reinstalado. Pesquisa de faixas não é exposta pelo MPRIS do BitChord.
 - **Sistema:** somente leitura de informações do sistema; serviços permitidos são uma lista fechada.
 - **Clima:** resolvido pelo backend com Open-Meteo antes do LLM, usando coordenadas do GPS do app.
 

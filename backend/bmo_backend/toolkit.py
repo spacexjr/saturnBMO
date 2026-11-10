@@ -20,6 +20,8 @@ from typing import Any, Awaitable, Callable
 from .apps import AppManager
 from .files import Workspace, WorkspaceError
 from .media import MediaError, MediaService
+from .music.manager import MusicError, MusicManager
+from .music.tools import build_music_tools
 from .sysinfo import SystemInfo, SystemInfoError
 from .web import WebError, WebService
 
@@ -110,6 +112,7 @@ class ToolRegistry:
         media: MediaService,
         web: WebService,
         system: SystemInfo,
+        music: MusicManager | None = None,
         config: dict[str, Any] | None = None,
     ) -> None:
         self.workspace = workspace
@@ -117,6 +120,7 @@ class ToolRegistry:
         self.media = media
         self.web = web
         self.system = system
+        self.music = music
         self.config = config or {}
         self.max_steps = int(self.config.get("max_steps", 5))
         self._specs: dict[str, ToolSpec] = {}
@@ -274,13 +278,19 @@ class ToolRegistry:
             media.control,
             activity="playing_music",
         ))
-        self._add(ToolSpec(
-            "music_search",
-            "Pesquisa e reproduz uma música. Só funciona se o player expuser essa capacidade.",
-            _object({"query": _string("Música ou artista.")}, ["query"]),
-            media.search_and_play,
-            activity="playing_music",
-        ))
+        if self.music is not None:
+            # As ferramentas novas cobrem YouTube Music + Mopidy. O controle
+            # genérico por MPRIS (music_status/music_control) é preservado.
+            for item in build_music_tools(self.music):
+                self._add(ToolSpec(**item))
+        else:
+            self._add(ToolSpec(
+                "music_search",
+                "Pesquisa e reproduz uma música. Só funciona se o player expuser essa capacidade.",
+                _object({"query": _string("Música ou artista.")}, ["query"]),
+                media.search_and_play,
+                activity="playing_music",
+            ))
         self._add(ToolSpec(
             "list_files",
             "Lista arquivos e pastas dentro da pasta autorizada do BMO.",
@@ -435,6 +445,10 @@ class ToolRegistry:
             "workspace": self.workspace.status(),
             "apps": self.apps.status(),
             "media": self.media.status(),
+            "music": {
+                "enabled": self.music is not None,
+                "tools": [name for name in self.names() if name.startswith("music_")],
+            },
             "web": self.web.status(),
             "system": self.system.status(),
         }
@@ -468,7 +482,7 @@ class ToolRegistry:
             )
         try:
             return await self._invoke(spec, args)
-        except (WorkspaceError, WebError, MediaError, SystemInfoError, ToolError) as exc:
+        except (WorkspaceError, WebError, MediaError, MusicError, SystemInfoError, ToolError) as exc:
             return ToolResult(False, {"error": str(exc)})
         except Exception as exc:  # noqa: BLE001
             log.exception("Falha na ferramenta %s", name)

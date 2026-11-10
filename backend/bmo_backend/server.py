@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 from .actions import ALLOWED_ACTIONS, detect_local_intent, parse_authorized_action
 from .acoustic_wakeword import AcousticWakeWord
 from .agent import AgentResult, ToolAgent
+from .api.music_routes import build_music_routers
 from .apps import AppManager
 from .audio import EnergyVad, pcm16_to_wav
 from .config import DATA_DIR, load_config, public_config, resolve_runtime_paths
@@ -37,6 +38,8 @@ from .files import Workspace, WorkspaceError
 from .folder_picker import FolderPicker, FolderPickerError
 from .llm import LlmError, LlmUnavailable, OllamaBrain, sanitize_reply
 from .media import MediaError, MediaService
+from .music import build_music_manager
+from .music.manager import MusicError
 from .protocol import (
     PROTOCOL_VERSION,
     SERVICE_VERSION,
@@ -90,6 +93,7 @@ class Services:
         workspace: Any = None,
         apps: Any = None,
         media: Any = None,
+        music: Any = None,
         web: Any = None,
         system: Any = None,
         registry: Any = None,
@@ -121,6 +125,14 @@ class Services:
         )
         self.apps = apps if apps is not None else AppManager(tools_cfg.get("apps", {}))
         self.media = media if media is not None else MediaService(tools_cfg.get("media", {}))
+        self.music = (
+            music
+            if music is not None
+            else build_music_manager(
+                config.get("music", {}),
+                server_port=int(config.get("server", {}).get("port", 8765)),
+            )
+        )
         web_cfg = dict(tools_cfg.get("web", {}) or {})
         web_cfg.setdefault("allow_private_urls", bool(tools_cfg.get("allow_private_urls", False)))
         self.web = web if web is not None else WebService(web_cfg)
@@ -134,6 +146,7 @@ class Services:
                 media=self.media,
                 web=self.web,
                 system=self.system,
+                music=self.music,
                 config=tools_cfg,
             )
         )
@@ -227,6 +240,8 @@ class Services:
         base = ["text", "audio", "tts", "vad", "location", "get_time", "get_date", "get_weather"]
         if self.tools_enabled:
             base.extend(["tools", "internet", "desktop", "media", "files", "folder", "system_info"])
+        if self.music is not None:
+            base.extend(["music", "youtube_music", "music_queue"])
         return base
 
     async def refresh_status(self, force: bool = False) -> dict[str, Any]:
@@ -375,6 +390,10 @@ def create_app(config: dict[str, Any] | None = None, services: Services | None =
     app.state.services = services
     app.state.config = config
 
+    music_router, music_stream_router = build_music_routers(require_auth)
+    app.include_router(music_router)
+    app.include_router(music_stream_router)
+
     @app.middleware("http")
     async def security_headers(request: Request, call_next: Callable[[Request], Awaitable[Response]]):
         response = await call_next(request)
@@ -411,6 +430,9 @@ def create_app(config: dict[str, Any] | None = None, services: Services | None =
                 "frame_ms": int(config["audio"]["frame_ms"]),
             },
             "wakeword": services.wake_status(),
+            "music": await services.music.status() if services.music is not None else {
+                "enabled": False
+            },
             "tools": {
                 "enabled": services.tools_enabled,
                 "names": services.registry.names() if services.tools_enabled else [],
@@ -473,6 +495,13 @@ def create_app(config: dict[str, Any] | None = None, services: Services | None =
         try:
             return await services.media.current()
         except MediaError as exc:
+            # Preserva o endpoint antigo, mas usa o Mopidy quando o MPRIS não
+            # tem player ativo. Assim o app Android continua compatível.
+            if services.music is not None:
+                try:
+                    return await services.music.get_state()
+                except MusicError:
+                    pass
             return JSONResponse(
                 status_code=503,
                 content={"available": False, "error": str(exc)},

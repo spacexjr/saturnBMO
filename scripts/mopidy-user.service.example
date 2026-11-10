@@ -1,0 +1,24 @@
+# Exemplo de serviço de usuário para o Mopidy no Nobara/Fedora.
+#
+# 1. Ajuste o caminho do binário se necessário: `command -v mopidy`.
+# 2. Copie para ~/.config/systemd/user/mopidy.service
+# 3. Execute:
+#    systemctl --user daemon-reload
+#    systemctl --user enable --now mopidy
+#    systemctl --user status mopidy
+#
+# O serviço roda na sessão do usuário para acessar o PipeWire/PulseAudio.
+# A porta HTTP fica restrita a 127.0.0.1 pela configuração do Mopidy.
+
+[Unit]
+Description=Mopidy (player local do SaturnBMO)
+After=network.target sound.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/mopidy --config %h/.config/mopidy/mopidy.conf
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

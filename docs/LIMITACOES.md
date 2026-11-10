@@ -61,15 +61,19 @@ O arquivo `assets/wakeword_hey_jarvis.onnx` é o modelo **“Hey Jarvis”** do 
 - Nomes de aplicativos podem variar entre instalações e idiomas.
 - Não há automação de cliques, teclado ou leitura de tela.
 
-## 6. BitChord 1.8 / música
+## 6. Música (Mopidy + YouTube Music) e BitChord
 
-- Integração exclusivamente por **MPRIS/D-Bus**; o BitChord não é modificado nem reinstalado.
-- Descoberta dinâmica de `org.mpris.MediaPlayer2.*`, priorizando `bitchord`.
-- Suportado: play, pause, alternar, próxima, anterior, parar e volume.
-- **Pesquisar e tocar uma faixa por voz não é possível** pela interface pública do BitChord 1.8. O backend informa essa limitação em vez de fingir que executou.
-- Se nenhum player MPRIS estiver ativo, as ferramentas de música retornam indisponível.
-- O rosto mostra título/artista/estado quando o backend envia metadados reais.
+- O player principal é o **Mopidy 4**, acessível apenas em `127.0.0.1` por JSON-RPC. A API do BMO exige token; o proxy de áudio usa URL assinada por HMAC.
+- A busca e a reprodução usam `ytmusicapi` + `yt-dlp`, não o plugin `mopidy-ytmusic`. O plugin 0.3.8 exige Mopidy 3, `pytube<13` e `ytmusicapi<0.30`; é incompatível com o Mopidy 4 testado.
+- **A busca depende de serviços não oficiais do YouTube Music.** `ytmusicapi` e `yt-dlp` podem quebrar quando o YouTube muda. Atualize as duas bibliotecas.
+- URLs de áudio expiram. O BMO re resolve o fluxo a cada reprodução; não guarda URLs `googlevideo.com` na fila.
+- Faixas com restrição de idade, região, assinatura ou DRM podem exigir cookies do yt-dlp. Sem isso, a API devolve erro real.
+- Playlists e músicas curtidas exigem autenticação por navegador (`ytmusicapi browser`). Busca e reprodução anônimas continuam funcionando.
+- Metadados da fila ficam em memória: após reiniciar o backend, a fila do Mopidy permanece, mas títulos podem ficar vazios até tocar novamente.
+- O BMO não baixa arquivos permanentemente; o áudio é transmitido ao Mopidy.
 - O waveform/equalizador é procedural; não é uma análise espectral da faixa.
+- O BitChord 1.8 continua suportado como player alternativo via **MPRIS/D-Bus** em `/api/v1/media` e nas ferramentas antigas `music_status`/`music_control`. Pesquisa de faixas não é exposta pelo MPRIS do BitChord.
+- Se o Mopidy estiver indisponível, as ferramentas novas de música retornam erro de indisponibilidade em vez de sucesso falso.
 
 ## 7. Arquivos
 
