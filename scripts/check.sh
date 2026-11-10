@@ -18,7 +18,7 @@ fi
 echo "[ok] sem permissão de câmera"
 
 if [ ! -x "$ROOT/backend/.venv/bin/python" ]; then
-  echo "ERRO: backend/.venv não existe. Rode ./scripts/setup_backend.sh" >&2
+  echo "ERRO: backend/.venv não existe. Rode ./scripts/setupbackend.sh" >&2
   exit 1
 fi
 

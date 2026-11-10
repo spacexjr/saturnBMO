@@ -55,7 +55,7 @@ O arquivo `local.properties` é local e está no `.gitignore`.
 Na raiz do projeto:
 
 ```bash
-./scripts/setup_backend.sh
+./scripts/setupbackend.sh
 ```
 
 O script:
@@ -63,8 +63,16 @@ O script:
 - cria `backend/.venv`;
 - instala `backend/requirements.txt` e `backend/requirements-dev.txt`;
 - cria `backend/data/token` se ainda não existir;
-- verifica Piper, Faster-Whisper, espeak-ng, playerctl, kdialog/zenity e Ollama;
+- configura `backend/.env` com as portas, Mopidy e YouTube Music;
+- gera e valida `backend/data/mopidy/mopidy.conf` restrito a `127.0.0.1`;
+- verifica Piper, Faster-Whisper, espeak-ng, GStreamer, playerctl, kdialog/zenity e Ollama;
 - lista o que estiver faltando.
+
+Depois, para subir Mopidy e o backend juntos:
+
+```bash
+./scripts/start-all.sh
+```
 
 Para executar manualmente:
 

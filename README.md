@@ -79,10 +79,10 @@ O celular não executa LLM nem STT. As ferramentas locais são expostas ao model
 
 ```bash
 cd /caminho/para/saturnBMO
-./scripts/setup_backend.sh
+./scripts/setupbackend.sh
 ```
 
-O script cria `backend/.venv`, instala as dependências, gera o token em `backend/data/token` e confere as ferramentas. Ele não baixa modelos grandes automaticamente; siga [docs/INSTALACAO.md](docs/INSTALACAO.md) para Piper, Faster-Whisper e Ollama.
+O script cria `backend/.venv`, instala as dependências, gera o token em `backend/data/token`, configura `backend/.env` e cria uma configuração local do Mopidy em `backend/data/mopidy/mopidy.conf` (HTTP restrito a `127.0.0.1:6680`). Ele não baixa modelos grandes automaticamente; siga [docs/INSTALACAO.md](docs/INSTALACAO.md) para Piper, Faster-Whisper e Ollama.
 
 Inicie o Ollama e baixe o modelo, se ainda não existir:
 
@@ -93,7 +93,20 @@ ollama pull qwen3:8b
 
 Se o PC tiver pouca memória, troque `llm.model` em `backend/config.json` por um modelo menor disponível em `ollama list`.
 
-Inicie o backend:
+Inicie tudo (Mopidy + backend) com um comando:
+
+```bash
+./scripts/start-all.sh
+```
+
+O script espera os dois serviços ficarem prontos, valida a API de música e mostra o IP e o token para o Android. Para ver o estado ou parar:
+
+```bash
+./scripts/status-all.sh
+./scripts/stop-all.sh
+```
+
+Se preferir iniciar apenas o backend:
 
 ```bash
 ./backend/run.sh

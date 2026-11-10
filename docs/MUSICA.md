@@ -58,16 +58,24 @@ sudo dnf install gstreamer1-plugins-good gstreamer1-plugins-bad-free \
 > `gstreamer1-plugins-ugly` ou `gstreamer1-plugin-libav`. Verifique com
 > `dnf search gstreamer1-plugin`.
 
-### 2. Configuração local do Mopidy
+### 2. Configuração automática recomendada
 
-Copie o exemplo e ajuste apenas se necessário:
+Na raiz do projeto, execute uma vez:
 
 ```bash
-mkdir -p ~/.config/mopidy
-cp docs/mopidy.conf.example ~/.config/mopidy/mopidy.conf
+./scripts/setupbackend.sh
 ```
 
-O exemplo habilita:
+Ele cria toda a configuração local do Mopidy em
+`backend/data/mopidy/mopidy.conf`, configura `backend/.env`, gera/verifica o
+token e valida a configuração. Depois, suba os dois serviços juntos:
+
+```bash
+./scripts/start-all.sh
+./scripts/status-all.sh
+```
+
+O config gerado habilita:
 
 - HTTP em `127.0.0.1:6680` (nunca `0.0.0.0`);
 - extensão `stream`, que permite ao Mopidy consumir a URL assinada do backend;
@@ -76,7 +84,7 @@ O exemplo habilita:
 Teste em primeiro plano:
 
 ```bash
-mopidy --config ~/.config/mopidy/mopidy.conf
+mopidy --config backend/data/mopidy/mopidy.conf
 curl -sS -X POST http://127.0.0.1:6680/mopidy/rpc \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"core.get_version","params":{}}'
@@ -84,14 +92,13 @@ curl -sS -X POST http://127.0.0.1:6680/mopidy/rpc \
 
 Resposta esperada: `{"jsonrpc":"2.0","id":1,"result":"4.0.0..."}`.
 
-Para iniciar junto com a sessão gráfica:
+`./scripts/start-all.sh` inicia os dois serviços em segundo plano e registra os
+PIDs em `backend/data/run/`. Para iniciar junto com a sessão gráfica, adapte
+`scripts/mopidy-user.service.example` para apontar para
+`backend/data/mopidy/mopidy.conf`.
 
-```bash
-systemctl --user enable --now mopidy
-systemctl --user status mopidy
-```
-
-Se preferir um serviço próprio, use `scripts/mopidy-user.service.example`.
+Se preferir configurar o Mopidy manualmente em `~/.config/mopidy/`, use
+`docs/mopidy.conf.example` como referência.
 
 ### 3. Dependências do backend
 
@@ -105,7 +112,7 @@ yt-dlp>=2025.1
 Atualize o ambiente:
 
 ```bash
-./scripts/setup_backend.sh
+./scripts/setupbackend.sh
 # ou
 cd backend && .venv/bin/pip install -r requirements.txt
 ```
