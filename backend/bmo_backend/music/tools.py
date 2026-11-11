@@ -370,4 +370,168 @@ def build_music_tools(music: MusicManager) -> list[dict[str, Any]]:
             ),
             music.liked_songs,
         ),
+    ] + _mopidy_aliases(music, play_tool, queue_add_tool, search_tool)
+
+
+def _mopidy_aliases(
+    music: MusicManager, play_tool: Any, queue_add_tool: Any, search_tool: Any
+) -> list[dict[str, Any]]:
+    """Nomes explícitos do Mopidy, equivalentes às ferramentas music_*.
+
+    Existem para que o modelo atenda pedidos como "estado do Mopidy",
+    "pesquise no Mopidy" e "limpe a fila do Mopidy" sem confundir o player
+    com o BitChord legado.
+    """
+
+    async def status_tool() -> dict[str, Any]:
+        info = await music.status()
+        try:
+            info["playback"] = await music.get_state()
+        except Exception as exc:  # noqa: BLE001 - status não deve falhar inteiro
+            info["playback_error"] = str(exc)
+        return info
+
+    def spec(
+        name: str,
+        description: str,
+        parameters: dict[str, Any],
+        handler: Any,
+        *,
+        timeout_s: float = 45.0,
+    ) -> dict[str, Any]:
+        return {
+            "name": name,
+            "description": description,
+            "parameters": parameters,
+            "handler": handler,
+            "activity": "playing_music",
+            "timeout_s": timeout_s,
+        }
+
+    return [
+        spec(
+            "mopidy_start",
+            "Inicia o serviço Mopidy no PC (systemctl --user), sem sudo, e confirma "
+            "que ele responde. Use só quando o usuário pedir para iniciar ou quando "
+            "o player estiver comprovadamente indisponível.",
+            _object({}),
+            music.start,
+            timeout_s=40.0,
+        ),
+        spec(
+            "mopidy_status",
+            "Consulta o estado do serviço Mopidy e da reprodução: tocando, pausado, "
+            "parado, faixa atual, volume, posição e fila.",
+            _object({}),
+            status_tool,
+        ),
+        spec(
+            "mopidy_now_playing",
+            "Informa a música atual do Mopidy com título, artista, álbum, posição e duração.",
+            _object({}),
+            music.now_playing,
+        ),
+        spec(
+            "mopidy_play",
+            "Toca uma música no Mopidy. Passe query com o nome pedido ou track_id de "
+            "mopidy_search. Só confirme depois de verified=true.",
+            _object(
+                {
+                    "track_id": _string("Id da faixa (opcional se usar query)."),
+                    "query": _string("Nome da música ou artista."),
+                }
+            ),
+            play_tool,
+        ),
+        spec("mopidy_pause", "Pausa a reprodução do Mopidy.", _object({}), music.pause),
+        spec(
+            "mopidy_resume",
+            "Retoma a reprodução pausada do Mopidy.",
+            _object({}),
+            music.resume,
+        ),
+        spec("mopidy_stop", "Para a reprodução do Mopidy.", _object({}), music.stop),
+        spec("mopidy_next", "Avança para a próxima faixa do Mopidy.", _object({}), music.next),
+        spec(
+            "mopidy_previous",
+            "Volta para a faixa anterior do Mopidy.",
+            _object({}),
+            music.previous,
+        ),
+        spec(
+            "mopidy_seek",
+            "Move a reprodução do Mopidy para uma posição em milissegundos.",
+            _object(
+                {
+                    "position_ms": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Posição desejada em milissegundos.",
+                    }
+                },
+                ["position_ms"],
+            ),
+            music.seek,
+        ),
+        spec(
+            "mopidy_set_volume",
+            "Define o volume do Mopidy em porcentagem de 0 a 100.",
+            _object(
+                {
+                    "volume": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 100,
+                        "description": "Volume em porcentagem.",
+                    }
+                },
+                ["volume"],
+            ),
+            music.set_volume,
+        ),
+        spec(
+            "mopidy_get_volume",
+            "Consulta o volume atual do Mopidy.",
+            _object({}),
+            music.get_volume,
+        ),
+        spec(
+            "mopidy_search",
+            "Pesquisa faixas, artistas, álbuns ou playlists para o Mopidy. Não toca nada.",
+            _object(
+                {
+                    "query": _string("Nome da música, artista, álbum ou playlist."),
+                    "filter": _string(
+                        "Tipo de resultado.",
+                        ["songs", "artists", "albums", "playlists", "all"],
+                    ),
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 20},
+                },
+                ["query"],
+            ),
+            search_tool,
+        ),
+        spec(
+            "mopidy_add_to_queue",
+            "Adiciona uma faixa à fila do Mopidy sem interromper a música atual.",
+            _object(
+                {
+                    "track_id": _string("Id da faixa."),
+                    "query": _string("Nome para pesquisar e adicionar."),
+                }
+            ),
+            queue_add_tool,
+        ),
+        spec(
+            "mopidy_get_queue",
+            "Lista a fila atual do Mopidy com índice, título, artista e duração.",
+            _object({}),
+            music.queue_list,
+        ),
+        spec(
+            "mopidy_clear_queue",
+            "Esvazia a fila do Mopidy.",
+            _object({}),
+            music.queue_clear,
+        ),
     ]

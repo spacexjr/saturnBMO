@@ -10,6 +10,8 @@ from typing import AsyncIterator, Any
 
 import httpx
 
+from .toolcalls import looks_like_tool_payload, strip_tool_artifacts
+
 log = logging.getLogger("bmo.llm")
 
 
@@ -129,9 +131,30 @@ class OllamaBrain:
         return sanitize_reply("".join(pieces))
 
 
-def sanitize_reply(text: str) -> str:
-    text = text.strip()
+def sanitize_reply(text: str, known_tools: list[str] | None = None) -> str:
+    """Limpa a resposta falada e nunca deixa JSON de ferramenta vazar.
+
+    ``known_tools`` permite remover chamadas completas. Mesmo sem a lista, a
+    limpeza reconhece a forma de uma chamada e remove o objeto.
+    """
+    text = str(text or "").strip()
     # Alguns modelos colocam o nome do personagem no início.
     text = re.sub(r"^\s*(BMO|Bmo|bmo)\s*:\s*", "", text)
+    text = strip_tool_artifacts(text, known_tools or [])
+    if looks_like_tool_payload(text):
+        # Sobrou um objeto de chamada inválido: não fale estruturas internas.
+        text = re.sub(r"\{.*\}", " ", text, flags=re.DOTALL)
+        text = strip_tool_artifacts(text, known_tools or [])
+    # A resposta é falada: remove markdown, listas e ênfase, mantendo o texto.
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", text)
+    text = re.sub(r"(?m)(?:^|\s)[-*•]\s+", " ", text)
+    text = re.sub(r"[*_`]+", "", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    # Emojis e pictogramas não são falados pelo TTS.
+    text = re.sub(
+        r"[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F\u200D\u2B00-\u2BFF]",
+        "",
+        text,
+    )
     text = re.sub(r"\s+", " ", text)
     return text.strip()

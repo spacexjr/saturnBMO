@@ -65,6 +65,7 @@ fun SettingsScreen(
     logs: List<LogEntry>,
     onBack: () -> Unit,
     onSave: (AppSettings) -> Unit,
+    onKeepScreenChange: (Boolean) -> Unit,
     onTestTone: () -> Unit,
     onResetHistory: () -> Unit,
 ) {
@@ -439,7 +440,10 @@ fun SettingsScreen(
                 title = "Manter tela ligada",
                 subtitle = "Útil enquanto o celular está na carcaça do BMO.",
                 checked = keepScreen,
-                onChange = { keepScreen = it },
+                onChange = {
+                    keepScreen = it
+                    onKeepScreenChange(it)
+                },
             )
             HorizontalDivider(color = BmoPanelStrong)
             SwitchRow(

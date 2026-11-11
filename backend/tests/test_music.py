@@ -97,6 +97,9 @@ class FakeMopidy:
         else:
             self.state = "stopped"
 
+    async def seek(self, position_ms: int) -> None:
+        self.calls.append(("seek", {"position_ms": int(position_ms)}))
+
     async def tracklist_tracks(self) -> list[dict[str, Any]]:
         return [dict(item) for item in self.tracks]
 
@@ -210,6 +213,9 @@ class FakeResolver:
 
     async def resolve(self, video_id: str) -> ResolvedStream:
         return ResolvedStream(url="http://audio.invalid/test", headers={}, expires_at=9e12)
+
+    def status(self) -> dict[str, object]:
+        return {"enabled": True, "resolver": "fake", "installed": True}
 
 
 def make_manager(tmp_path, *, fail_play: bool = False) -> tuple[MusicManager, FakeMopidy, FakeYTMusic]:
@@ -611,6 +617,52 @@ def test_music_tool_specs_have_clear_descriptions(tmp_path):
     assert all(spec["description"] for spec in specs)
     handlers = {spec["name"]: spec["handler"] for spec in specs}
     assert callable(handlers["music_get_state"])
+
+
+def test_mopidy_aliases_are_registered_and_work(tmp_path):
+    manager, _, _ = make_manager(tmp_path)
+    registry = ToolRegistry(
+        workspace=Workspace(None),
+        apps=AppManager({"enabled": False}),
+        media=MediaService({"enabled": False}),
+        web=WebService({"enabled": False}),
+        system=SystemInfo({"enabled": False}),
+        music=manager,
+        config={},
+    )
+    names = set(registry.names())
+    expected = {
+        "mopidy_start",
+        "mopidy_status",
+        "mopidy_now_playing",
+        "mopidy_play",
+        "mopidy_pause",
+        "mopidy_stop",
+        "mopidy_next",
+        "mopidy_previous",
+        "mopidy_seek",
+        "mopidy_set_volume",
+        "mopidy_get_volume",
+        "mopidy_search",
+        "mopidy_add_to_queue",
+        "mopidy_get_queue",
+        "mopidy_clear_queue",
+    }
+    assert expected <= names
+
+    async def scenario() -> None:
+        played = await registry.execute("mopidy_play", {"query": "Daft Punk"})
+        assert played.ok and played.data["verified"] is True
+        status = await registry.execute("mopidy_status", {})
+        assert status.ok and status.data["playback"]["status"] == "playing"
+        added = await registry.execute(
+            "mopidy_add_to_queue", {"id": VIDEO_B}
+        )
+        assert added.ok
+        seeked = await registry.execute("mopidy_seek", {"position_ms": 5000})
+        assert seeked.ok and seeked.data["position_ms"] == 12000
+
+    run(scenario())
 
 
 # ---------------------------------------------------------------------------

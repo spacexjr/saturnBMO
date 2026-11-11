@@ -1,9 +1,12 @@
 package com.spacexjr.saturnbmo.ui
 
 import android.Manifest
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.pm.PackageManager
 import android.os.Build
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -121,8 +124,22 @@ fun BmoApp(engine: BmoEngine) {
     }
 
     DisposableEffect(settings.keepScreenOn) {
-        view.keepScreenOn = settings.keepScreenOn
-        onDispose { view.keepScreenOn = false }
+        val keepOn = settings.keepScreenOn
+        // Além da View, aplica na janela: o Compose pode recriar a view e
+        // alguns fabricantes ignoram o flag apenas na view.
+        view.keepScreenOn = keepOn
+        val window = context.findActivity()?.window
+        if (window != null) {
+            if (keepOn) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
+        onDispose {
+            view.keepScreenOn = false
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
     }
 
     BackHandler(enabled = screen == Screen.SETTINGS) { screen = Screen.MAIN }
@@ -185,10 +202,21 @@ fun BmoApp(engine: BmoEngine) {
                         }
                         screen = Screen.MAIN
                     },
+                    onKeepScreenChange = { enabled ->
+                        // Aplica na hora e persiste, mesmo sem tocar em Salvar.
+                        settings = settings.copy(keepScreenOn = enabled)
+                        engine.saveSettings(settings, reconnect = false)
+                    },
                     onTestTone = { engine.testTone() },
                     onResetHistory = { engine.resetHistory() },
                 )
             }
         }
     }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }

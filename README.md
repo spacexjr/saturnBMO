@@ -15,14 +15,17 @@ O celular Android é a interface: mostra o rosto do BMO em paisagem, captura o m
 - Indicadores procedurais das operações reais: pesquisando, lendo, abrindo/fechando app, arquivos, sistema, confirmação, sucesso e erro.
 - Controles escondidos: toque no rosto mostra/oculta; toque longo abre os ajustes.
 - Microfone PCM 16 kHz mono, em blocos de 20 ms, com VAD por energia no PC.
-- STT local com **Faster-Whisper** (principal), modelo, `compute_type`, `beam_size`, VAD e idioma configuráveis.
+- STT local com **Faster-Whisper** (principal), modelo, `compute_type`, `beam_size`, VAD, idioma e vocabulário contextual configuráveis.
 - Whisper.cpp preservado como fallback opcional.
 - Palavra de ativação em modo **híbrido**: classificador acústico `saturnbmo.onnx` + verificação por transcrição.
-- Conversa com Ollama em português do Brasil, com tool calling nativo.
+- Conversa com Ollama em português do Brasil, com tool calling nativo, validação de argumentos, timeouts por ferramenta e proteção contra chamadas duplicadas.
+- Recuperação de chamadas que o modelo imprime como JSON no texto: a ferramenta só é executada se o nome existir no registro e os argumentos forem válidos; o JSON nunca é falado nem mostrado.
+- Respostas faladas passam por limpeza de markdown, blocos de código e artefatos internos de ferramentas.
 - Voz local com Piper (pt-BR) e fallback para espeak-ng.
 - Internet: `web_search`, `open_url`, `read_webpage`, `extract_page_content` e `summarize_web_content`.
 - Controle de aplicativos no KDE/Nobara: listar, abrir, fechar, minimizar, maximizar, restaurar e trazer para frente.
 - Ferramentas de música para o LLM: `music_search`, `music_play`, `music_pause`, `music_resume`, `music_stop`, `music_next`, `music_previous`, `music_set_volume`, `music_get_volume`, `music_get_state`, `music_get_now_playing`, `music_queue_*`, `music_playlist_*` e `music_liked_songs`.
+- Aliases explícitos do Mopidy: `mopidy_start`, `mopidy_status`, `mopidy_now_playing`, `mopidy_play`, `mopidy_pause`, `mopidy_stop`, `mopidy_next`, `mopidy_previous`, `mopidy_seek`, `mopidy_set_volume`, `mopidy_get_volume`, `mopidy_search`, `mopidy_add_to_queue`, `mopidy_get_queue` e `mopidy_clear_queue`. `mopidy_start` usa `systemctl --user start` sem sudo.
 - BitChord 1.8 via MPRIS/D-Bus preservado como player alternativo: play, pause, próxima, anterior, parar e volume.
 - Arquivos confinados a uma pasta autorizada, escolhida por seletor nativo (`kdialog`/`zenity`): listar, buscar, ler, criar, editar, renomear, copiar, mover, excluir e metadados.
 - Exclusões exigem confirmação explícita no app ou por voz/texto.
@@ -132,7 +135,8 @@ systemctl --user enable --now mopidy
 Mantenha o Mopidy em `127.0.0.1:6680`. O backend fala com ele por JSON-RPC e
 o app usa somente a API autenticada do BMO. Busca e reprodução do YouTube Music
 funcionam sem login; para playlists e músicas curtidas, gere
-`backend/data/ytmusic_auth.json` com `cd backend && .venv/bin/ytmusicapi browser`.
+`backend/data/ytmusic_auth.json` com `./scripts/ytmusic_login.py` (o script abre
+o navegador e guia a cópia dos headers).
 Passo a passo completo, segurança e limitações em **[docs/MUSICA.md](docs/MUSICA.md)**.
 
 ### 3. Autorizar uma pasta no PC
@@ -269,7 +273,7 @@ cd backend
   --output /tmp/bmo-resposta-e2e.wav
 ```
 
-Estado atual: **76 testes de backend** e **17 testes unitários Android** passam. A validação manual em aparelho real e com voz humana ainda deve ser refeita para o conjunto atual; veja [docs/EVIDENCIAS_TESTES.md](docs/EVIDENCIAS_TESTES.md).
+Estado atual: **114 testes de backend** e **17 testes unitários Android** passam com JDK 21. A validação manual em aparelho real e com voz humana ainda deve ser refeita para o conjunto atual; veja [docs/EVIDENCIAS_TESTES.md](docs/EVIDENCIAS_TESTES.md).
 
 ## Segurança e privacidade
 

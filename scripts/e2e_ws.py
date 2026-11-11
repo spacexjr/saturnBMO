@@ -37,6 +37,11 @@ async def main() -> int:
     parser.add_argument("--text", default="Ei, BMO, conte uma piada curta.")
     parser.add_argument("--audio", help="WAV já existente em vez de sintetizar")
     parser.add_argument("--output", default="/tmp/bmo-resposta.wav")
+    parser.add_argument(
+        "--activate",
+        action="store_true",
+        help="Simula o toque em 'Falar agora' (activate) para testar STT/LLM/ferramentas sem depender da wake word.",
+    )
     args = parser.parse_args()
 
     config = load_config()
@@ -72,8 +77,14 @@ async def main() -> int:
         await ws.send(json.dumps({
             "type": "audio.start", "format": "pcm_s16le", "sample_rate": 16000, "channels": 1,
         }))
-        ready = json.loads(await ws.recv())
+        while True:
+            ready = json.loads(await ws.recv())
+            if ready.get("type") == "audio.ready":
+                break
         print(f"[teste] Áudio pronto: {ready.get('type')}")
+        if args.activate:
+            await ws.send(json.dumps({"type": "activate"}))
+            print("[teste] Ativação manual enviada (sem wake word).")
 
         frame = 640  # 20 ms a 16 kHz mono PCM16
         for offset in range(0, len(pcm), frame):

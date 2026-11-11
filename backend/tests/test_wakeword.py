@@ -21,6 +21,23 @@ def test_detects_common_whisper_variant():
     assert result.matched_phrase == "ei bemo"
 
 
+def test_detects_mo_variant_from_real_transcription():
+    detector = WakeWordDetector(["ei bmo", "ei mo", "bmo"])
+    result = detector.detect("Ei, Mo, quais aplicativos estão instalados no PC?")
+    assert result.detected
+    assert result.matched_phrase == "ei mo"
+    assert "aplicativos" in result.remaining_text
+
+
+def test_fuzzy_accepts_bumol_but_not_bom_dia():
+    detector = WakeWordDetector(["ei bmo", "bmo"])
+    result = detector.detect("Ei, Bumol, quais aplicativos estão instalados?")
+    assert result.detected
+    assert "aplicativos" in result.remaining_text
+    assert detector.detect("Bom dia, tudo bem?").detected is False
+    assert detector.detect("Ei, bem, tudo bem?").detected is False
+
+
 def test_does_not_detect_unrelated_speech():
     detector = WakeWordDetector(["ei bmo", "bmo"])
     result = detector.detect("Boa tarde, tudo bem?")

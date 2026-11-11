@@ -190,6 +190,27 @@ Também é possível gerar com:
 .venv/bin/python -m ytmusicapi browser
 ```
 
+Ou use o script do projeto, que abre o navegador, aceita headers crus ou um
+comando `curl` copiado do DevTools, valida a conta e salva no caminho
+configurado:
+
+```bash
+./scripts/ytmusic_login.py
+
+# somente validar a sessão existente
+./scripts/ytmusic_login.py --check
+
+# sem abrir o navegador / ler headers de um arquivo
+./scripts/ytmusic_login.py --no-browser --headers /tmp/headers.txt
+```
+
+Passo a passo: faça login em `https://music.youtube.com`, abra o DevTools (F12),
+vá em **Network/Rede**, recarregue a página, filtre por `browse`, clique numa
+requisição `browse?...` e use **Copy as cURL** (ou copie os Request Headers).
+Cole no terminal e pressione Enter duas vezes. O script grava o arquivo com
+permissão `600` e só substitui a autenticação antiga se a nova sessão for
+validada.
+
 O arquivo contém cookies de sessão. Ele está no `.gitignore` e nunca deve ser
 commitado, enviado em prints ou compartilhado. Se a autenticação for removida,
 o BMO volta ao modo anônimo para busca.

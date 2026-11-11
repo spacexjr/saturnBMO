@@ -10,15 +10,27 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 import httpx
 
 from .llm import LlmError, LlmUnavailable, sanitize_reply
+from .toolcalls import (
+    find_text_tool_calls,
+    looks_like_tool_payload,
+    remove_spans,
+)
 from .toolkit import PendingConfirmation, ToolRegistry, result_text
 
 log = logging.getLogger("bmo.agent")
+
+_INTERNAL_ECHO = re.compile(
+    r"(já foi executada|chamada repetida|use o resultado anterior|"
+    r"não chame ferramentas|instru[cç][õo]es internas)",
+    re.IGNORECASE,
+)
 
 Emit = Callable[..., Awaitable[None]]
 
@@ -51,7 +63,13 @@ Ferramentas:
   para uma faixa claramente identificada; só pergunte se houver ambiguidade real
   entre artistas ou versões diferentes. Nunca diga que uma música começou antes de
   a ferramenta retornar verified=true. Se music_play falhar, explique o erro real.
+  Só use mopidy_start se o usuário pedir para iniciar o Mopidy ou se você já
+  confirmou que o serviço está parado; não insista depois de um erro de conexão.
 - Prefira respostas curtas, em português brasileiro, sem emojis e sem markdown.
+- Quando o usuário pedir para listar aplicativos instalados, use list_apps (com
+  query quando houver um tipo, como música ou navegador). Quando pedir o que
+  está aberto agora, use list_running_apps. Para abrir ou fechar, use launch_app
+  ou close_app com o nome dito pelo usuário.
 """
 
 
@@ -88,7 +106,11 @@ class ToolAgent:
         return messages
 
     async def _chat(
-        self, messages: list[dict[str, Any]], *, with_tools: bool
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        with_tools: bool,
+        tool_schemas: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.model,
@@ -101,7 +123,11 @@ class ToolAgent:
             },
         }
         if with_tools:
-            payload["tools"] = self.registry.schemas()
+            payload["tools"] = (
+                tool_schemas
+                if tool_schemas is not None
+                else self.registry.schemas()
+            )
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(self.timeout_s, connect=10.0)
@@ -129,36 +155,76 @@ class ToolAgent:
     async def run(self, user_text: str, emit: Emit) -> AgentResult:
         messages = self._messages(user_text)
         used: list[str] = []
+        seen_calls: set[str] = set()
+        repairs = 0
+        if hasattr(self.registry, "schemas_for"):
+            tool_schemas = self.registry.schemas_for(user_text)
+        else:  # pragma: no cover - registros de teste simples
+            tool_schemas = self.registry.schemas()
         try:
             for _step in range(max(1, self.max_steps)):
-                data = await self._chat(messages, with_tools=True)
+                data = await self._chat(
+                    messages, with_tools=True, tool_schemas=tool_schemas
+                )
                 message = data.get("message") or {}
-                tool_calls = message.get("tool_calls") or []
+                content = str(message.get("content") or "")
+                tool_calls = self._structured_calls(message.get("tool_calls"))
+                if not tool_calls and content:
+                    # O modelo pode imprimir a chamada como texto. Só aceitamos
+                    # nomes registrados; a execução continua sendo validada.
+                    recovered = find_text_tool_calls(content, self.registry.names())
+                    if recovered:
+                        log.info(
+                            "Chamada de ferramenta recuperada do texto: %s",
+                            ", ".join(call.name for call in recovered),
+                        )
+                        tool_calls = [
+                            {"function": {"name": call.name, "arguments": call.arguments}}
+                            for call in recovered
+                        ]
+                        content = remove_spans(content, recovered)
                 if not tool_calls:
-                    answer = sanitize_reply(str(message.get("content") or ""))
+                    answer = sanitize_reply(content, self.registry.names())
                     if not answer:
+                        if looks_like_tool_payload(content) and repairs < 1:
+                            # JSON inválido/desconhecido: não mostra nada e pede
+                            # uma nova resposta estruturada, sem executar nada.
+                            repairs += 1
+                            messages.append(
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        "Sua resposta anterior continha uma estrutura de "
+                                        "ferramenta inválida e não foi executada. Responda "
+                                        "em português apenas com texto natural. Se precisar "
+                                        "de uma ferramenta, use a chamada estruturada."
+                                    ),
+                                }
+                            )
+                            continue
                         raise LlmError("O modelo não retornou texto.")
                     self._remember(user_text, answer)
                     return AgentResult(text=answer, tools_used=used)
                 messages.append(
                     {
                         "role": "assistant",
-                        "content": str(message.get("content") or ""),
+                        "content": content,
                         "tool_calls": tool_calls,
                     }
                 )
                 for call in tool_calls:
-                    function = (call or {}).get("function") or {}
-                    name = str(function.get("name") or "")
-                    raw_args = function.get("arguments") or {}
-                    if isinstance(raw_args, str):
-                        try:
-                            raw_args = json.loads(raw_args)
-                        except json.JSONDecodeError:
-                            raw_args = {}
-                    if not isinstance(raw_args, dict):
-                        raw_args = {}
+                    name = call["function"]["name"]
+                    raw_args = call["function"].get("arguments") or {}
                     used.append(name)
+                    canonical = self.registry.canonical_arguments(name, raw_args)
+                    signature = json.dumps(
+                        [name, canonical], ensure_ascii=False, sort_keys=True, default=str
+                    )
+                    if signature in seen_calls:
+                        # Não execute de novo e não deixe o texto interno virar
+                        # resposta: encerra as ferramentas e pede a resposta final.
+                        return await self._final_answer(messages, user_text, used)
+                    seen_calls.add(signature)
                     await emit(
                         "activity",
                         activity=self._activity_for(name),
@@ -194,6 +260,10 @@ class ToolAgent:
                         payload = result.data or {}
                         if "status" in payload or "title" in payload:
                             await emit("music", **payload)
+                    if name.startswith("mopidy_") and result.ok and result.data:
+                        payload = result.data
+                        if "status" in payload or "title" in payload or "track" in payload:
+                            await emit("music", **payload)
                     if name in {"music_status", "music_control"} and result.ok:
                         await emit(
                             "activity",
@@ -226,29 +296,68 @@ class ToolAgent:
                         }
                     )
             # Limite de passos: pede uma resposta final sem ferramentas.
-            data = await self._chat(
-                messages
-                + [
-                    {
-                        "role": "system",
-                        "content": (
-                            "Responda agora em português com base apenas nos resultados "
-                            "reais já obtidos. Seja breve e não invente nada."
-                        ),
-                    }
-                ],
-                with_tools=False,
-            )
-            answer = sanitize_reply(str((data.get("message") or {}).get("content") or ""))
-            if not answer:
-                raise LlmError("O modelo não retornou uma resposta final.")
-            self._remember(user_text, answer)
-            return AgentResult(text=answer, tools_used=used)
+            return await self._final_answer(messages, user_text, used)
         except (LlmUnavailable, LlmError):
             raise
         except Exception as exc:  # noqa: BLE001
             log.exception("Falha no agente de ferramentas")
             raise LlmError(f"Falha ao executar ferramentas: {exc}") from exc
+
+    async def _final_answer(
+        self,
+        messages: list[dict[str, Any]],
+        user_text: str,
+        used: list[str],
+    ) -> AgentResult:
+        """Pede uma resposta final sem ferramentas, sem expor texto interno."""
+        data = await self._chat(
+            messages
+            + [
+                {
+                    "role": "system",
+                    "content": (
+                        "Responda agora em português, falando com o usuário, com base "
+                        "apenas nos resultados reais já obtidos. Não chame ferramentas, "
+                        "não repita instruções internas, seja breve e não invente nada."
+                    ),
+                }
+            ],
+            with_tools=False,
+        )
+        answer = sanitize_reply(
+            str((data.get("message") or {}).get("content") or ""),
+            self.registry.names(),
+        )
+        if not answer or _INTERNAL_ECHO.search(answer):
+            raise LlmError("O modelo não retornou uma resposta final.")
+        self._remember(user_text, answer)
+        return AgentResult(text=answer, tools_used=used)
+
+    @staticmethod
+    def _structured_calls(raw: Any) -> list[dict[str, Any]]:
+        """Normaliza ``tool_calls`` da API do Ollama em chamadas utilizáveis."""
+        if not isinstance(raw, list):
+            return []
+        calls: list[dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            function = item.get("function")
+            if not isinstance(function, dict):
+                continue
+            name = str(function.get("name") or "").strip()
+            if not name:
+                continue
+            arguments = function.get("arguments") or {}
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    arguments = {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            calls.append({"function": {"name": name, "arguments": arguments}})
+        return calls
 
     def _remember(self, user_text: str, answer: str) -> None:
         self.history.append({"role": "user", "content": user_text})
@@ -307,10 +416,35 @@ class ToolAgent:
             "search_files": "searching_files",
             "system_info": "checking_system",
         }
+        if name.startswith("mopidy_"):
+            return "playing_music"
         return mapping.get(name, "processing")
 
     @staticmethod
     def _label_for(name: str, done: bool = False) -> str:
+        if name.startswith("mopidy_"):
+            mopidy_labels = {
+                "mopidy_start": ("Iniciando o Mopidy", "Mopidy iniciado"),
+                "mopidy_status": ("Consultando o Mopidy", "Mopidy consultado"),
+                "mopidy_now_playing": ("Consultando a música atual", "Música atual"),
+                "mopidy_play": ("Tocando música", "Música iniciada"),
+                "mopidy_pause": ("Pausando a música", "Música pausada"),
+                "mopidy_resume": ("Retomando a música", "Música retomada"),
+                "mopidy_stop": ("Parando a música", "Música parada"),
+                "mopidy_next": ("Pulando a música", "Próxima música"),
+                "mopidy_previous": ("Voltando a música", "Música anterior"),
+                "mopidy_seek": ("Movendo a reprodução", "Posição alterada"),
+                "mopidy_set_volume": ("Ajustando o volume", "Volume ajustado"),
+                "mopidy_get_volume": ("Consultando o volume", "Volume consultado"),
+                "mopidy_search": ("Procurando música", "Busca concluída"),
+                "mopidy_add_to_queue": ("Adicionando à fila", "Adicionada à fila"),
+                "mopidy_get_queue": ("Consultando a fila", "Fila consultada"),
+                "mopidy_clear_queue": ("Limpando a fila", "Fila limpa"),
+            }
+            start, finish = mopidy_labels.get(
+                name, ("Controlando o Mopidy", "Mopidy atualizado")
+            )
+            return finish if done else start
         labels = {
             "web_search": ("Pesquisando na internet", "Pesquisa concluída"),
             "read_webpage": ("Lendo a página", "Página lida"),

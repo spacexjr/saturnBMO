@@ -1,6 +1,7 @@
 package com.spacexjr.saturnbmo
 
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.core.view.WindowCompat
@@ -52,6 +53,20 @@ class MainActivity : ComponentActivity() {
         )
         engine.saveSettings(updated, reconnect = false)
         engine.connect(updated)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Reaplica ao voltar do segundo plano ou após recriar a janela.
+        applyKeepScreenOn()
+    }
+
+    private fun applyKeepScreenOn() {
+        if (engine.currentSettings().keepScreenOn) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
     }
 
     override fun onStop() {

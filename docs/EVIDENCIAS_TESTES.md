@@ -1,6 +1,80 @@
 # Evidências de teste
 
-Registro do que foi realmente executado. As seções históricas abaixo são de **2026-10-28**; a atualização de **2026-11-08** cobre Faster-Whisper e ferramentas; a de **2026-11-10** cobre a integração musical.
+Registro do que foi realmente executado. As seções históricas abaixo são de **2026-10-28**; a atualização de **2026-11-08** cobre Faster-Whisper e ferramentas; a de **2026-11-10** cobre a integração musical; a de **2026-11-11** cobre execução real de ferramentas, recuperação de chamadas e o pipeline de voz.
+
+## Atualização 2026-11-11 — ferramentas reais e pipeline de voz
+
+### Testes automatizados
+
+```text
+backend: 114 passed
+android: 17 passed + BUILD SUCCESSFUL (JDK 21)
+```
+
+Distribuição relevante:
+
+```text
+tests/test_agent_core.py   13 testes  (loop de ferramentas, chamada em texto, dedup, confirmação, sanitização)
+tests/test_music.py        23 testes  (mopidy_* e music_*, aliases, volume, fila)
+tests/test_wakeword.py      8 testes  (frases e correspondência fuzzy conservadora)
+android: 3 AppSettings + 9 FaceClassifier + 5 ActivityFace
+```
+
+Os testes Android e o `assembleDebug` foram executados com
+`JAVA_HOME=/home/renatto/.local/jdks/jdk-21.0.12.1+1`.
+
+### Ferramentas reais com Ollama
+
+Execuções reais com `qwen3:8b` e o registro completo de ferramentas:
+
+```text
+"que aplicativos estão instalados no PC?"  -> list_apps executou de verdade
+"abra o Firefox"                           -> launch_app abriu o Firefox
+"o que está tocando?"                      -> mopidy_now_playing retornou erro amigável
+                                              (Mopidy offline), sem inventar faixa
+```
+
+Foi validado que o backend:
+
+- executa a ferramenta e devolve o resultado real ao modelo;
+- não mostra JSON, schema, `tool_calls` nem argumentos ao usuário;
+- recupera uma chamada impressa como texto apenas quando o nome está registrado
+  e os argumentos passam na validação; caso contrário, descarta e pede resposta
+  natural;
+- não executa a mesma chamada duas vezes na mesma pergunta;
+- exige confirmação explícita antes de exclusões.
+
+### Pipeline de voz ponta a ponta
+
+Comando:
+
+```bash
+cd backend
+.venv/bin/python ../scripts/e2e_ws.py --activate \
+  --text "Ei, BMO, quais aplicativos estão instalados no PC?" \
+  --output /tmp/bmo-e2e-resposta.wav
+```
+
+Resultado:
+
+```text
+PASS  Piper -> PCM16 -> WebSocket -> Faster-Whisper -> agente -> list_apps -> Piper
+PASS  resposta em português salva em /tmp/bmo-e2e-resposta.wav
+```
+
+O mesmo fluxo sem `--activate` também passou uma vez: a transcrição sintética
+saiu como `Ei, Mo` e a correspondência fuzzy conservadora aceitou a ativação.
+Variantes como `Ei, Bom` e `Bumol` também são aceitas, enquanto frases comuns
+como `Bom dia` e `Ei, bem` são rejeitadas. A voz sintética do Piper continua
+transcrevendo “BMO” de forma instável; isso é uma limitação do áudio sintético,
+não uma prova com voz humana.
+
+### Pendente
+
+- “Ei, BMO” com voz humana real, em diferentes distâncias e ruídos.
+- Mopidy ativo no ambiente de teste (o serviço estava inacessível; o erro real
+  foi propagado corretamente).
+- Validar o APK em celular físico.
 
 ## Atualização 2026-11-10 — música real
 

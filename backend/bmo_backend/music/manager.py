@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import time
 from typing import Any, Iterable
 
@@ -101,6 +102,60 @@ class MusicManager:
             return True
         except MopidyError:
             return False
+
+    async def start(self) -> dict[str, Any]:
+        """Inicia o Mopidy como serviço de usuário, sem sudo.
+
+        Só é chamado por uma ferramenta quando o usuário pede explicitamente.
+        Nunca executa shell: usa ``systemctl --user start <unit>``.
+        """
+        if await self.available():
+            return {
+                "ok": True,
+                "already_running": True,
+                "message": "O Mopidy já está em execução.",
+                "rpc_url": self.config.mopidy.rpc_url,
+            }
+        unit = (self.config.mopidy.service_unit or "mopidy").strip()
+        if not unit or any(ch in unit for ch in " ;|&$`\n\t"):
+            raise MusicError("Unidade do Mopidy inválida na configuração.")
+        binary = shutil.which("systemctl")
+        if binary is None:
+            raise MusicUnavailable("systemctl não encontrado neste sistema.")
+        try:
+            process = await asyncio.create_subprocess_exec(
+                binary,
+                "--user",
+                "start",
+                unit,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(process.communicate(), timeout=15.0)
+        except asyncio.TimeoutError as exc:
+            raise MusicUnavailable("O systemctl demorou demais para iniciar o Mopidy.") from exc
+        except OSError as exc:
+            raise MusicUnavailable(f"Não foi possível iniciar o Mopidy: {exc}") from exc
+        if process.returncode not in (0, None):
+            detail = stderr.decode("utf-8", "ignore").strip()[:300]
+            raise MusicUnavailable(
+                f"O systemctl não iniciou a unidade '{unit}': {detail or process.returncode}"
+            )
+        deadline = time.monotonic() + self.config.mopidy.start_timeout_s
+        while time.monotonic() < deadline:
+            if await self.available():
+                return {
+                    "ok": True,
+                    "started": True,
+                    "message": "Mopidy iniciado e respondendo.",
+                    "rpc_url": self.config.mopidy.rpc_url,
+                    "unit": unit,
+                }
+            await asyncio.sleep(0.5)
+        raise MusicUnavailable(
+            "O Mopidy foi iniciado, mas ainda não respondeu. "
+            "Confira o log do serviço e a configuração HTTP."
+        )
 
     # -- estado --------------------------------------------------------------
 
@@ -362,6 +417,22 @@ class MusicManager:
 
     async def previous(self) -> dict[str, Any]:
         return await self._skip("previous")
+
+    async def seek(self, position_ms: int) -> dict[str, Any]:
+        try:
+            target = max(0, int(position_ms))
+        except (TypeError, ValueError) as exc:
+            raise MusicError("A posição deve ser informada em milissegundos.") from exc
+        try:
+            await self.mopidy.seek(target)
+        except MopidyUnavailable as exc:
+            raise MusicUnavailable(str(exc)) from exc
+        except MopidyError as exc:
+            raise MusicError(str(exc)) from exc
+        state = await self._state()
+        data = state.as_dict()
+        data.update({"ok": True, "action": "seek", "position_ms": state.position_ms})
+        return data
 
     # -- volume --------------------------------------------------------------
 

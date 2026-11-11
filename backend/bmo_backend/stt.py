@@ -58,6 +58,26 @@ class FasterWhisperStt:
         self.beam_size = int(config.get("beam_size", 5))
         self.num_workers = int(config.get("num_workers", 1))
         self.vad_filter = bool(config.get("vad_filter", True))
+        self.condition_on_previous_text = bool(
+            config.get("condition_on_previous_text", False)
+        )
+        vocabulary = config.get("vocabulary")
+        if isinstance(vocabulary, (list, tuple)):
+            words = [str(item).strip() for item in vocabulary if str(item).strip()]
+            vocabulary_prompt = ", ".join(words)
+        else:
+            vocabulary_prompt = str(vocabulary or "").strip()
+        self.initial_prompt = str(config.get("initial_prompt") or vocabulary_prompt).strip()
+        self.hotwords = (
+            str(config.get("hotwords") or "").strip()
+            or str(config.get("vocabulary_hotwords") or "").strip()
+        )
+        if not self.hotwords and isinstance(vocabulary, (list, tuple)):
+            self.hotwords = " ".join(
+                str(item).strip() for item in vocabulary if str(item).strip()
+            )
+        if not self.hotwords:
+            self.hotwords = self.initial_prompt
         self.timeout_s = float(config.get("timeout_s", 180))
         self._model: Any = None
         self._load_error: str | None = None
@@ -83,6 +103,9 @@ class FasterWhisperStt:
             "language": "auto" if self.auto_language else self.language,
             "beam_size": self.beam_size,
             "vad_filter": self.vad_filter,
+            "condition_on_previous_text": self.condition_on_previous_text,
+            "initial_prompt": self.initial_prompt,
+            "hotwords": self.hotwords,
             "load_error": self._load_error,
         }
 
@@ -153,7 +176,9 @@ class FasterWhisperStt:
             beam_size=self.beam_size,
             vad_filter=self.vad_filter,
             vad_parameters={"min_silence_duration_ms": 500},
-            condition_on_previous_text=False,
+            condition_on_previous_text=self.condition_on_previous_text,
+            initial_prompt=self.initial_prompt or None,
+            hotwords=self.hotwords or None,
             without_timestamps=True,
         )
         pieces = [segment.text.strip() for segment in segments if segment.text.strip()]

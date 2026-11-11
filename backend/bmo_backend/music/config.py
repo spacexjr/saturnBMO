@@ -17,6 +17,9 @@ class MopidyConfig:
     # O primeiro play pode aguardar o yt-dlp resolver o áudio.
     timeout_s: float = 20.0
     confirm_timeout_s: float = 10.0
+    # Unidade systemd de usuário usada por mopidy_start. Sem sudo.
+    service_unit: str = "mopidy"
+    start_timeout_s: float = 20.0
 
 
 @dataclass
@@ -65,6 +68,8 @@ class MusicConfig:
                 rpc_url=str(mopidy.get("rpc_url") or "http://127.0.0.1:6680/mopidy/rpc"),
                 timeout_s=float(mopidy.get("timeout_s", 20)),
                 confirm_timeout_s=float(mopidy.get("confirm_timeout_s", 10)),
+                service_unit=str(mopidy.get("service_unit") or "mopidy"),
+                start_timeout_s=max(2.0, float(mopidy.get("start_timeout_s", 20))),
             ),
             ytmusic=YtMusicConfig(
                 enabled=bool(ytmusic.get("enabled", True)),

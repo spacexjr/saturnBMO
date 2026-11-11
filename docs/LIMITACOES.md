@@ -24,7 +24,7 @@ O arquivo `assets/wakeword_hey_jarvis.onnx` é o modelo **“Hey Jarvis”** do 
 ## 2. STT
 
 - Motor principal: **Faster-Whisper** em CPU, modelo `medium`, `compute_type=int8`, idioma `pt`.
-- Modelo, dispositivo, `compute_type`, `beam_size`, `num_workers`, filtro VAD e idioma são configuráveis em `backend/config.json`.
+- Modelo, dispositivo, `compute_type`, `beam_size`, `num_workers`, filtro VAD, idioma, `condition_on_previous_text` e vocabulário contextual (`stt.vocabulary`) são configuráveis em `backend/config.json`.
 - O modelo é baixado/carregado no primeiro uso e pode demorar.
 - Pode errar nomes, números, acentos e palavras parecidas.
 - Frases longas ou fala sobreposta podem ser cortadas.
@@ -38,6 +38,8 @@ O arquivo `assets/wakeword_hey_jarvis.onnx` é o modelo **“Hey Jarvis”** do 
 - Ollama local; padrão `qwen3:8b`, configurável.
 - Pode alucinar, inventar fatos ou responder de forma inconsistente.
 - As ferramentas são validadas pelo backend, mas o modelo ainda escolhe qual chamar e com quais argumentos.
+- O agente valida campos obrigatórios, tipos, `enum` e limites, aplica timeout por ferramenta e ignora chamadas duplicadas.
+- Se o modelo imprimir uma chamada de ferramenta como texto, o backend só a executa quando o nome existe no registro e os argumentos passam na validação. JSON inválido é descartado e nunca vira resposta falada.
 - Hora e data são resolvidas localmente antes do LLM.
 - Histórico é em memória, por sessão; não há persistência entre reinícios.
 - Modelos maiores podem ser lentos em CPU e consumir muita memória.
@@ -71,6 +73,8 @@ O arquivo `assets/wakeword_hey_jarvis.onnx` é o modelo **“Hey Jarvis”** do 
 - Playlists e músicas curtidas exigem autenticação por navegador (`ytmusicapi browser`). Busca e reprodução anônimas continuam funcionando.
 - Metadados da fila ficam em memória: após reiniciar o backend, a fila do Mopidy permanece, mas títulos podem ficar vazios até tocar novamente.
 - O BMO não baixa arquivos permanentemente; o áudio é transmitido ao Mopidy.
+- `mopidy_start` só inicia o serviço de usuário configurado (`systemctl --user start`, sem sudo) e confirma que o JSON-RPC responde. Se o Mopidy não estiver instalado ou a unidade tiver outro nome, a ferramenta devolve erro real.
+- As ferramentas `mopidy_*` são aliases explícitos das `music_*`; `mopidy_seek` usa `core.playback.seek` em milissegundos.
 - O waveform/equalizador é procedural; não é uma análise espectral da faixa.
 - O BitChord 1.8 continua suportado como player alternativo via **MPRIS/D-Bus** em `/api/v1/media` e nas ferramentas antigas `music_status`/`music_control`. Pesquisa de faixas não é exposta pelo MPRIS do BitChord.
 - Se o Mopidy estiver indisponível, as ferramentas novas de música retornam erro de indisponibilidade em vez de sucesso falso.
