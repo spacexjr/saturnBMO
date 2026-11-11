@@ -1,178 +1,278 @@
+<div align="center">
+
 # saturnBMO
 
-![saturnBMO](assets/faces/listening/listen%2001.png)
+<img src="assets/faces/listening/listen%2001.png" alt="Rosto do saturnBMO" width="360">
 
-BMO de mesa com rosto animado no Android e processamento de voz/IA no PC.
+### Seu BMO de mesa: Android na interface, Linux no cérebro.
 
-O celular Android é a interface: mostra o rosto do BMO em paisagem, captura o microfone e reproduz a voz. O PC executa o backend local com detecção de fala, transcrição, LLM, ferramentas e síntese de voz. Áudio e texto da conversa não são enviados para nuvem.
+Assistente de voz local com reconhecimento de fala, IA, ferramentas, música e síntese de voz.
 
-> Estado atual: funcional em rede local. O backend e os testes automatizados rodam de ponta a ponta no PC. A validação com voz humana real da palavra de ativação acústica ainda está pendente; veja [Limitações](docs/LIMITACOES.md).
+**Privacidade local · Android + PC · Português do Brasil**
+
+</div>
+
+---
+
+## Sobre o projeto
+
+O **saturnBMO** transforma um celular Android em um BMO de mesa interativo. O telefone funciona como rosto, microfone e alto-falante; um computador Linux executa o processamento de voz, o modelo de linguagem e as ferramentas.
+
+A comunicação acontece pela rede local usando WebSocket autenticado. O áudio e o texto da conversa são processados localmente e não são enviados para serviços de IA na nuvem.
+
+> **Estado do projeto:** o sistema funciona em rede local e os testes automatizados do backend e do Android passam. A validação da palavra de ativação com voz humana real ainda está pendente. Consulte [Limitações conhecidas](docs/LIMITACOES.md).
+
+## Índice
+
+- [Funcionalidades](#funcionalidades)
+- [Arquitetura](#arquitetura)
+- [Tecnologias](#tecnologias)
+- [Requisitos](#requisitos)
+- [Instalação](#instalação)
+- [Configuração do Android](#configuração-do-android)
+- [Como usar](#como-usar)
+- [Palavra de ativação](#palavra-de-ativação)
+- [Configuração avançada](#configuração-avançada)
+- [Build](#build)
+- [Testes](#testes)
+- [Segurança e privacidade](#segurança-e-privacidade)
+- [Estrutura do projeto](#estrutura-do-projeto)
+- [Documentação](#documentação)
+- [Modelo 3D](#modelo-3d)
+- [Licença e créditos](#licença-e-créditos)
 
 ## Funcionalidades
 
-- Rosto do BMO ocupando a tela inteira, em paisagem, sem barras do sistema.
-- Cenas procedurais 8-bit desenhadas sobre os PNGs originais: clima, astronomia, matemática, ciência e música.
-- **Música real com Mopidy + YouTube Music**: busca, reprodução, pausa, próxima/anterior, parar, volume, fila, playlists e músicas curtidas. Título, artista, posição, duração e fila vêm do player real; o BitChord 1.8 continua disponível via MPRIS como alternativa.
-- Controles de música no app Android e por voz, com confirmação do Mopidy antes de o BMO afirmar que a música começou.
-- Indicadores procedurais das operações reais: pesquisando, lendo, abrindo/fechando app, arquivos, sistema, confirmação, sucesso e erro.
-- Controles escondidos: toque no rosto mostra/oculta; toque longo abre os ajustes.
-- Microfone PCM 16 kHz mono, em blocos de 20 ms, com VAD por energia no PC.
-- STT local com **Faster-Whisper** (principal), modelo, `compute_type`, `beam_size`, VAD, idioma e vocabulário contextual configuráveis.
-- Whisper.cpp preservado como fallback opcional.
-- Palavra de ativação em modo **híbrido**: classificador acústico `saturnbmo.onnx` + verificação por transcrição.
-- Conversa com Ollama em português do Brasil, com tool calling nativo, validação de argumentos, timeouts por ferramenta e proteção contra chamadas duplicadas.
-- Recuperação de chamadas que o modelo imprime como JSON no texto: a ferramenta só é executada se o nome existir no registro e os argumentos forem válidos; o JSON nunca é falado nem mostrado.
-- Respostas faladas passam por limpeza de markdown, blocos de código e artefatos internos de ferramentas.
-- Voz local com Piper (pt-BR) e fallback para espeak-ng.
-- Internet: `web_search`, `open_url`, `read_webpage`, `extract_page_content` e `summarize_web_content`.
-- Controle de aplicativos no KDE/Nobara: listar, abrir, fechar, minimizar, maximizar, restaurar e trazer para frente.
-- Ferramentas de música para o LLM: `music_search`, `music_play`, `music_pause`, `music_resume`, `music_stop`, `music_next`, `music_previous`, `music_set_volume`, `music_get_volume`, `music_get_state`, `music_get_now_playing`, `music_queue_*`, `music_playlist_*` e `music_liked_songs`.
-- Aliases explícitos do Mopidy: `mopidy_start`, `mopidy_status`, `mopidy_now_playing`, `mopidy_play`, `mopidy_pause`, `mopidy_stop`, `mopidy_next`, `mopidy_previous`, `mopidy_seek`, `mopidy_set_volume`, `mopidy_get_volume`, `mopidy_search`, `mopidy_add_to_queue`, `mopidy_get_queue` e `mopidy_clear_queue`. `mopidy_start` usa `systemctl --user start` sem sudo.
-- BitChord 1.8 via MPRIS/D-Bus preservado como player alternativo: play, pause, próxima, anterior, parar e volume.
-- Arquivos confinados a uma pasta autorizada, escolhida por seletor nativo (`kdialog`/`zenity`): listar, buscar, ler, criar, editar, renomear, copiar, mover, excluir e metadados.
-- Exclusões exigem confirmação explícita no app ou por voz/texto.
-- Informações do sistema (CPU, memória, disco, uptime etc.) sem shell arbitrário.
-- WebSocket autenticado por token e protocolo versionado `bmo/1`.
-- Descoberta do PC na rede local por UDP broadcast.
-- Reconexão automática, serviço em primeiro plano e logs de diagnóstico.
-- Sem câmera, sem gravação de áudio em arquivo e sem comandos de shell arbitrários.
+### Interface e animações
+
+- Rosto do BMO em tela cheia, orientação paisagem e sem barras do sistema.
+- Estados visuais para idle, listening, thinking, speaking, sleeping, capturing, error e warmup.
+- Cenas procedurais em estilo 8-bit sobre os PNGs originais: clima, astronomia, matemática, ciência e música.
+- Indicadores visuais de operações reais: pesquisa, leitura, abertura de aplicativos, arquivos, sistema, confirmação, sucesso e erro.
+- Toque no rosto para mostrar ou ocultar controles; toque longo para abrir os ajustes.
+
+### Voz e inteligência artificial
+
+- Captura de áudio PCM 16 kHz, mono, em blocos de 20 ms.
+- VAD por energia no PC.
+- **Faster-Whisper** como mecanismo principal de transcrição, com modelo, idioma, `compute_type`, `beam_size`, VAD e vocabulário contextual configuráveis.
+- Whisper.cpp disponível como alternativa.
+- Wake word híbrida: classificador acústico ONNX `saturnbmo.onnx` com verificação por transcrição.
+- Conversa com Ollama em português do Brasil, com tool calling, validação de argumentos, timeout por ferramenta e proteção contra chamadas duplicadas.
+- Recuperação de chamadas que o modelo eventualmente imprime como JSON: somente ferramentas registradas e argumentos válidos podem ser executados.
+- Síntese de voz local com Piper em português do Brasil e fallback para espeak-ng.
+- Limpeza de Markdown, blocos de código e conteúdo interno das ferramentas antes da resposta falada.
+
+### Música
+
+Integração principal com **Mopidy 4 + YouTube Music**:
+
+- Busca e reprodução de músicas.
+- Pausa, retomada, próxima, anterior e parada.
+- Controle de volume e posição.
+- Fila de reprodução.
+- Playlists e músicas curtidas.
+- Informações reais de título, artista, posição e duração.
+- Controles pelo aplicativo Android ou por voz.
+
+O **BitChord 1.8** continua disponível como alternativa via MPRIS/D-Bus.
+
+### Ferramentas e controle do PC
+
+- Pesquisa e leitura de páginas na internet.
+- Abertura de URLs.
+- Controle de aplicativos no KDE: listar, abrir, fechar, minimizar, maximizar, restaurar e trazer para frente.
+- Gerenciamento de arquivos dentro de uma pasta autorizada: listar, buscar, ler, criar, editar, renomear, copiar, mover, excluir e consultar metadados.
+- Informações do sistema: CPU, memória, armazenamento e uptime.
+- Confirmação explícita antes de excluir arquivos.
+- Descoberta automática do computador na rede local.
+- Reconexão automática e logs de diagnóstico.
 
 ## Arquitetura
 
+O Android é a interface física do BMO. O computador concentra o processamento pesado e as integrações locais.
+
+<div align="center">
+
+| Android | PC Linux |
+|:---:|:---:|
+| Rosto animado em Jetpack Compose | FastAPI + Uvicorn |
+| Captura com AudioRecord | VAD + Faster-Whisper |
+| Reprodução com AudioTrack | Wake word ONNX |
+| Token protegido pelo Android Keystore | Ollama + ferramentas |
+| Serviço em primeiro plano | Piper / espeak-ng |
+| Controles de música | Mopidy + YouTube Music |
+| Conexão WebSocket | MPRIS, XDG, arquivos e internet |
+
+</div>
+
 ```text
-┌─────────────────────────────┐        Wi-Fi local         ┌──────────────────────────────────┐
-│ Celular Android             │                            │ PC Linux (Nobara/KDE)            │
-│                             │  WebSocket bmo/1 + token   │                                  │
-│  Rosto / Compose            │ <────────────────────────> │  FastAPI + Uvicorn               │
-│  AudioRecord 16 kHz PCM16   │      áudio binário         │  VAD + Faster-Whisper (STT)      │
-│  AudioTrack streaming       │                            │  Wakeword ONNX + transcrição     │
-│  Android Keystore (token)   │                            │  Ollama (LLM + ferramentas)      │
-│  Serviço em 1º plano        │                            │  Piper / espeak-ng (TTS)         │
-│  Mopidy + YouTube Music          │
-│                             │       UDP 8766             │  MPRIS, XDG, arquivos, internet  │
-└─────────────────────────────┘                            └──────────────────────────────────┘
+┌──────────────────────────┐       Wi-Fi / USB       ┌──────────────────────────┐
+│       ANDROID            │   WebSocket bmo/1       │        PC LINUX          │
+│                          │   + token autenticado   │                          │
+│  Rosto / Jetpack Compose │ <─────────────────────> │  FastAPI / Uvicorn       │
+│  AudioRecord (PCM 16 kHz)│                         │  VAD / Faster-Whisper    │
+│  AudioTrack              │       Áudio             │  Wake word ONNX          │
+│  Android Keystore        │                         │  Ollama + Tool Calling   │
+│  Serviço em 1º plano     │                         │  Piper / espeak-ng      │
+│  Controles de música     │                         │  Mopidy / YouTube Music │
+│                          │       UDP 8766          │  Ferramentas locais     │
+└──────────────────────────┘                         └──────────────────────────┘
 ```
 
-O celular não executa LLM nem STT. As ferramentas locais são expostas ao modelo por um registro validado; não há execução de shell arbitrário. Operações destrutivas de arquivo passam por confirmação.
+O Android não executa o LLM nem a transcrição. O backend não permite execução arbitrária de comandos de shell. As operações com arquivos são limitadas à pasta autorizada pelo usuário.
+
+## Tecnologias
+
+| Componente | Tecnologia |
+|---|---|
+| Aplicativo | Kotlin + Jetpack Compose |
+| Backend | Python + FastAPI |
+| Comunicação | WebSocket + protocolo `bmo/1` |
+| Descoberta local | UDP broadcast |
+| Transcrição | Faster-Whisper |
+| Wake word | ONNX + verificação por transcrição |
+| Modelo de linguagem | Ollama |
+| Síntese de voz | Piper / espeak-ng |
+| Música | Mopidy 4 + YouTube Music |
+| Player alternativo | BitChord 1.8 via MPRIS |
 
 ## Requisitos
 
-### PC
+### Computador
 
-- Linux (testado no Fedora/Nobara, Python 3.12).
-- Python 3.11+ e `ffmpeg`.
-- [Ollama](https://ollama.com/) com um modelo local; o padrão do repositório é `qwen3:8b`.
-- [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper) (instalado via `requirements.txt`; o modelo é baixado no primeiro uso).
-- [Piper](https://github.com/rhasspy/piper) com voz `pt_BR-faber-medium.onnx`; `espeak-ng` como fallback.
-- [Mopidy 4](https://mopidy.com/) rodando em `127.0.0.1:6680` para música do YouTube Music; veja [docs/MUSICA.md](docs/MUSICA.md).
-- `ytmusicapi` e `yt-dlp` (já em `backend/requirements.txt`). Busca e reprodução funcionam sem login; playlists/curtidas exigem `ytmusicapi browser`.
-- `playerctl` e/ou `busctl` para MPRIS/BitChord (alternativa).
-- `kdialog` (KDE) ou `zenity` para o seletor nativo de pastas.
-- Portas `8765/tcp` e `8766/udp` liberadas na rede local.
-- Internet no PC apenas para as ferramentas web. Clima usa Open-Meteo.
+- Linux (testado no Fedora/Nobara com KDE).
+- Python 3.11 ou superior.
+- `ffmpeg`.
+- [Ollama](https://ollama.com/) com um modelo local. O padrão do repositório é `qwen3:8b`.
+- Faster-Whisper, instalado pelas dependências do backend.
+- [Piper](https://github.com/rhasspy/piper), com a voz `pt_BR-faber-medium.onnx`; espeak-ng é o fallback.
+- [Mopidy 4](https://mopidy.com/), para reprodução de música.
+- `ytmusicapi` e `yt-dlp`.
+- `playerctl` e/ou `busctl`, para MPRIS.
+- `kdialog` ou `zenity`, para selecionar a pasta autorizada.
+- Portas `8765/tcp` e `8766/udp` disponíveis na rede local.
 
-### Android
+### Celular
 
-- Android 8.0+ (API 26+).
-- Permissão de microfone; localização opcional para clima.
-- Mesma rede Wi-Fi do PC, ou USB com `adb reverse` para testes.
-- APK de depuração para desenvolvimento; release para uso normal.
+- Android 8.0 ou superior (API 26+).
+- Permissão de microfone.
+- Localização opcional, utilizada para recursos de clima.
+- Conexão à mesma rede do PC ou USB com `adb reverse`.
 
-## Início rápido
+## Instalação
 
-### 1. Preparar o backend
+### 1. Clonar o repositório
 
 ```bash
-cd /caminho/para/saturnBMO
+git clone https://github.com/spacexjr/saturnBMO.git
+cd saturnBMO
+```
+
+### 2. Preparar o backend
+
+```bash
 ./scripts/setupbackend.sh
 ```
 
-O script cria `backend/.venv`, instala as dependências, gera o token em `backend/data/token`, configura `backend/.env` e cria uma configuração local do Mopidy em `backend/data/mopidy/mopidy.conf` (HTTP restrito a `127.0.0.1:6680`). Ele não baixa modelos grandes automaticamente; siga [docs/INSTALACAO.md](docs/INSTALACAO.md) para Piper, Faster-Whisper e Ollama.
+O script prepara o ambiente virtual, instala as dependências, gera o token de autenticação em `backend/data/token`, configura o arquivo `.env` e cria a configuração local do Mopidy.
 
-Inicie o Ollama e baixe o modelo, se ainda não existir:
+### 3. Preparar o Ollama
+
+Inicie o serviço:
 
 ```bash
 ollama serve
+```
+
+Baixe o modelo padrão:
+
+```bash
 ollama pull qwen3:8b
 ```
 
-Se o PC tiver pouca memória, troque `llm.model` em `backend/config.json` por um modelo menor disponível em `ollama list`.
+Se o computador tiver pouca memória, escolha outro modelo compatível e altere `llm.model` em `backend/config.json`.
 
-Inicie tudo (Mopidy + backend) com um comando:
+### 4. Iniciar o sistema
+
+Para iniciar o Mopidy e o backend juntos:
 
 ```bash
 ./scripts/start-all.sh
 ```
 
-O script espera os dois serviços ficarem prontos, valida a API de música e mostra o IP e o token para o Android. Para ver o estado ou parar:
+O script aguarda os serviços ficarem prontos, verifica a API de música e informa o IP e o token necessários para conectar o Android.
+
+Para consultar o estado:
 
 ```bash
 ./scripts/status-all.sh
+```
+
+Para parar:
+
+```bash
 ./scripts/stop-all.sh
 ```
 
-Se preferir iniciar apenas o backend:
+Também é possível iniciar somente o backend:
 
 ```bash
 ./backend/run.sh
 ```
 
-Saída esperada: API em `http://0.0.0.0:8765` e descoberta UDP na porta 8766. O token está em:
+O backend disponibiliza a API na porta `8765/tcp` e a descoberta local na porta `8766/udp`.
 
-```bash
-cat backend/data/token
-```
+### 5. Configurar o Mopidy
 
-### 2. Ativar a música (Mopidy + YouTube Music)
-
-Instale e configure o Mopidy uma única vez:
+Instale os pacotes necessários no Fedora/Nobara:
 
 ```bash
 sudo dnf install mopidy gstreamer1-plugins-good gstreamer1-plugins-bad-free ffmpeg
+```
+
+Prepare a configuração:
+
+```bash
 mkdir -p ~/.config/mopidy
 cp docs/mopidy.conf.example ~/.config/mopidy/mopidy.conf
 systemctl --user enable --now mopidy
 ```
 
-Mantenha o Mopidy em `127.0.0.1:6680`. O backend fala com ele por JSON-RPC e
-o app usa somente a API autenticada do BMO. Busca e reprodução do YouTube Music
-funcionam sem login; para playlists e músicas curtidas, gere
-`backend/data/ytmusic_auth.json` com `./scripts/ytmusic_login.py` (o script abre
-o navegador e guia a cópia dos headers).
-Passo a passo completo, segurança e limitações em **[docs/MUSICA.md](docs/MUSICA.md)**.
+Mantenha o Mopidy restrito a `127.0.0.1:6680`. O backend se comunica com ele por JSON-RPC.
 
-### 3. Autorizar uma pasta no PC
+A busca e a reprodução do YouTube Music funcionam sem login. Playlists e músicas curtidas exigem autenticação do `ytmusicapi`:
 
-No app: **Ajustes → Pasta de acesso do BMO → Escolher pasta no PC**. O seletor nativo abre na tela do PC. A escolha fica em `backend/data/access.json` e pode ser revogada a qualquer momento. Sem pasta autorizada, as ferramentas de arquivo recusam todas as operações.
+```bash
+./scripts/ytmusic_login.py
+```
 
-### 4. Gerar e instalar o APK
+Consulte o [guia de música](docs/MUSICA.md) para os detalhes.
+
+## Configuração do Android
+
+### 1. Gerar o APK
 
 ```bash
 ./scripts/build_android.sh debug
+```
+
+### 2. Instalar no dispositivo
+
+```bash
 adb install -r android-app/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Para release assinado, veja [Build](#build).
+### 3. Conectar ao computador
 
-### 5. Configurar no celular
+1. Abra o saturnBMO no Android.
+2. Toque no rosto ou mantenha pressionado para abrir os ajustes.
+3. Informe o IP do PC, a porta `8765` e o token salvo em `backend/data/token`.
+4. Utilize **Testar** para verificar LLM, STT e TTS.
+5. Se estiver tudo certo, selecione **Salvar e conectar**.
+6. Autorize o microfone e, opcionalmente, a localização.
 
-1. Abra o app. A tela deve mostrar somente o rosto do BMO.
-2. Toque no rosto e em **⚙ Ajustes** (ou toque e segure).
-3. Informe o IP do PC, a porta `8765` e o token de `backend/data/token`.
-4. Toque em **Testar**. LLM, STT e TTS devem aparecer como `ok`.
-5. Toque em **Salvar e conectar**.
-6. Autorize a localização quando pedido (opcional, usada apenas para clima).
-7. Toque no botão do microfone e diga **“Ei, BMO”** seguido do pedido.
-
-Atalho de desenvolvimento: o APK debug aceita extras de conexão:
-
-```bash
-adb shell am start -n com.spacexjr.saturnbmo.debug/com.spacexjr.saturnbmo.MainActivity \
-  --es bmo_host 192.168.0.10 --ei bmo_port 8765 \
-  --es bmo_token "$(cat backend/data/token)"
-```
-
-Para teste via USB:
+Para desenvolvimento via USB:
 
 ```bash
 adb reverse tcp:8765 tcp:8765
@@ -181,36 +281,59 @@ adb shell am start -n com.spacexjr.saturnbmo.debug/com.spacexjr.saturnbmo.MainAc
   --es bmo_token "$(cat backend/data/token)"
 ```
 
-## Uso
+## Como usar
 
-- **Rosto somente:** o app abre sem botões. Toque no rosto para revelar os controles.
-- **Falar agora:** ativa o microfone e ignora a palavra de ativação uma vez.
-- **Digitar:** conversa por texto, útil se o microfone ou o TTS falharem.
-- **Música:** toque em **Música** para buscar no YouTube Music, tocar ou adicionar à fila. Quando algo está tocando, aparece uma barra com título, progresso, volume e botões de anterior, play/pause, próxima e parar.
-- **Música por voz:** peça, por exemplo, “toque Legião Urbana”, “pause a música”, “aumente o volume para 40” ou “qual está tocando?”. O BMO só confirma depois de consultar o Mopidy.
-- **Confirmação:** exclusões mostram um diálogo com **Confirmar** e **Cancelar**; também é possível responder “sim” ou “não” por voz/texto.
-- **Parar fala:** interrompe a reprodução e a resposta em andamento.
-- **Testar alto-falante/microfone:** tom de 440 Hz e medidor local de nível.
+- **Falar:** diga “Ei, BMO” e faça seu pedido.
+- **Falar agora:** ativa o microfone sem precisar da palavra de ativação naquela interação.
+- **Digitar:** permite conversar por texto.
+- **Música:** abre os controles para pesquisar, tocar e gerenciar a fila.
+- **Parar fala:** interrompe a reprodução da resposta atual.
+- **Testar áudio:** reproduz um tom de 440 Hz e exibe o nível do microfone.
+- **Confirmações:** operações destrutivas exigem confirmação explícita.
 
-### Palavra de ativação
+Exemplos de comandos:
 
-O modo padrão é **hybrid**:
+```text
+Ei, BMO, que horas são?
+Ei, BMO, toque Legião Urbana.
+Ei, BMO, pause a música.
+Ei, BMO, aumente o volume para 40.
+Ei, BMO, qual música está tocando?
+Ei, BMO, abra o navegador.
+```
 
-- o classificador acústico ONNX (`wakeword/saturnbmo.onnx`) roda no áudio de entrada;
-- a transcrição do Faster-Whisper continua como fallback;
-- frases aceitas incluem “Ei BMO”, “Hey BMO”, “Hey Beemo”, “Be eme ó” e variantes normalizadas;
-- há cooldown e o BMO ignora o próprio áudio durante a fala.
+## Palavra de ativação
 
-O modelo acústico e os modelos de mel/embedding estão em `wakeword/`. A detecção foi validada apenas com áudio sintético; **áudio de voz humana real ainda precisa ser testado**. Veja [Limitações](docs/LIMITACOES.md).
+O modo padrão é **híbrido**:
 
-## Configuração
+1. O classificador acústico ONNX (`wakeword/saturnbmo.onnx`) analisa o áudio.
+2. A transcrição do Faster-Whisper funciona como verificação e fallback.
+3. Há cooldown para evitar ativações repetidas.
+4. O BMO ignora o próprio áudio enquanto está falando.
 
-O arquivo principal é `backend/config.json`. Variáveis de ambiente sobrescrevem valores (`BMO_HOST`, `BMO_PORT`, `BMO_LLM_MODEL`, `BMO_STT_MODEL`, `BMO_STT_COMPUTE_TYPE`, `BMO_WAKEWORD_MODE`, `BMO_TOOLS_ENABLED`, etc.). O token pode vir de `BMO_TOKEN`.
+Frases reconhecidas pelo fluxo incluem:
 
-Principais opções de STT:
+- Ei BMO
+- Hey BMO
+- Hey Beemo
+- Be eme ó
+
+O detector acústico foi validado com áudio sintético. A validação com gravações de voz humana real ainda está pendente. Consulte [Limitações](docs/LIMITACOES.md).
+
+## Configuração avançada
+
+O arquivo principal é:
+
+```text
+backend/config.json
+```
+
+As variáveis de ambiente podem sobrescrever configurações, incluindo `BMO_HOST`, `BMO_PORT`, `BMO_LLM_MODEL`, `BMO_STT_MODEL`, `BMO_STT_COMPUTE_TYPE`, `BMO_WAKEWORD_MODE`, `BMO_TOOLS_ENABLED` e `BMO_TOKEN`.
+
+Exemplo de configuração do Faster-Whisper:
 
 ```json
-"stt": {
+{
   "engine": "faster_whisper",
   "model": "medium",
   "device": "cpu",
@@ -222,51 +345,63 @@ Principais opções de STT:
 }
 ```
 
-`medium`/`int8` é o padrão atual: melhor precisão que o `small`, com ~3,4 s de inferência para ~1,7 s de áudio em CPU (medido nesta máquina). Se a latência incomodar, volte para `small`; modelos maiores aumentam memória e tempo.
+O perfil `medium`/`int8` é o padrão documentado atualmente. Em uma medição registrada no projeto, a inferência levou aproximadamente 3,4 segundos para processar 1,7 segundo de áudio em CPU. Se a latência for alta, experimente o modelo `small`.
 
 ## Build
 
-### Debug
+### APK de depuração
 
 ```bash
 ./scripts/build_android.sh debug
 ```
 
-Saída: `android-app/app/build/outputs/apk/debug/app-debug.apk`
+Saída:
 
-### Release assinado
+```text
+android-app/app/build/outputs/apk/debug/app-debug.apk
+```
 
-O projeto não guarda a chave de assinatura no repositório. Gere uma chave local uma vez:
+### APK de release
+
+Gere uma chave de assinatura local:
 
 ```bash
 ./scripts/generate_release_keystore.sh
 ```
 
-Depois:
+Depois execute:
 
 ```bash
 ./scripts/build_android.sh release
 ```
 
-O APK fica em `android-app/app/build/outputs/apk/release/app-release.apk`.
+Saída:
+
+```text
+android-app/app/build/outputs/apk/release/app-release.apk
+```
+
+A chave de assinatura não deve ser enviada ao repositório.
 
 ## Testes
 
-Backend:
+### Backend
 
 ```bash
 cd backend
 .venv/bin/python -m pytest -q
 ```
 
-Android:
+### Android
 
 ```bash
 cd android-app
 JAVA_HOME=/caminho/para/jdk-17-ou-21 ./gradlew testDebugUnitTest
 ```
 
-Teste E2E com serviços reais (Faster-Whisper, Piper, Ollama e backend):
+### Teste de ponta a ponta
+
+Com Faster-Whisper, Piper, Ollama e backend disponíveis:
 
 ```bash
 cd backend
@@ -275,54 +410,77 @@ cd backend
   --output /tmp/bmo-resposta-e2e.wav
 ```
 
-Estado atual: **114 testes de backend** e **17 testes unitários Android** passam com JDK 21. A validação manual em aparelho real e com voz humana ainda deve ser refeita para o conjunto atual; veja [docs/EVIDENCIAS_TESTES.md](docs/EVIDENCIAS_TESTES.md).
+Último resultado documentado no README:
+
+- **114 testes** de backend.
+- **17 testes** unitários Android.
+- JDK 21.
+
+Os testes automatizados não substituem a validação manual em um aparelho real. Consulte [Evidências de teste](docs/EVIDENCIAS_TESTES.md).
 
 ## Segurança e privacidade
 
-- O backend escuta na rede local e exige token Bearer em HTTP e WebSocket.
-- O app guarda o token cifrado com AES/GCM e chave do Android Keystore.
-- Não há câmera, permissão de câmera, upload de áudio para nuvem ou shell arbitrário.
-- Conteúdo web é tratado como não confiável; URLs privadas/loopback são bloqueadas por padrão.
-- Ferramentas de arquivo são confinadas à pasta autorizada, com proteção contra `..` e links simbólicos.
-- Exclusões exigem confirmação explícita.
-- A API usa HTTP sem TLS para funcionar offline em LAN. Não exponha a porta 8765 à internet.
-- Leia [docs/SEGURANCA_E_PRIVACIDADE.md](docs/SEGURANCA_E_PRIVACIDADE.md).
+- Comunicação autenticada por token Bearer em HTTP e WebSocket.
+- Token Android protegido com AES/GCM e Android Keystore.
+- Processamento de voz e IA no computador local.
+- Sem câmera, permissão de câmera ou gravação de áudio em arquivo.
+- Sem execução arbitrária de shell.
+- Ferramentas de arquivo limitadas à pasta autorizada.
+- Proteção contra caminhos `..` e links simbólicos.
+- Exclusões exigem confirmação.
+- Conteúdo externo da internet é tratado como não confiável.
+- URLs privadas e loopback são bloqueadas por padrão nas ferramentas web.
+
+**Atenção:** a API utiliza HTTP sem TLS para funcionar na rede local. Não exponha a porta `8765` diretamente à internet.
+
+Leia também [Segurança e privacidade](docs/SEGURANCA_E_PRIVACIDADE.md).
 
 ## Estrutura do projeto
 
 ```text
-backend/                 FastAPI, VAD, STT, LLM, TTS, ferramentas e testes
-  bmo_backend/
-  tests/
-  config.json
-  run.sh
-android-app/             App Android (Kotlin + Compose)
-  app/src/main/java/com/spacexjr/saturnbmo/
-  app/src/main/assets/faces/
-  app/build.gradle.kts
-assets/                  Rosto original, licença e wakeword legado
-docs/                    Instalação, protocolo, segurança, limitações e evidências
-protocol/schemas/        Esquemas JSON do protocolo bmo/1
-scripts/                 Setup, build, E2E e utilitários
-tools/                   Binários/modelos locais (não versionados)
-wakeword/                Modelo acústico e modelos de mel/embedding
+saturnBMO/
+├── android-app/       Aplicativo Android em Kotlin + Compose
+├── assets/            Rostos originais e arquivos de licença
+├── backend/           API, STT, VAD, LLM, TTS e ferramentas
+├── docs/              Guias, limitações e evidências
+├── protocol/          Esquemas JSON do protocolo bmo/1
+├── scripts/           Instalação, build e testes E2E
+├── tools/             Ferramentas e modelos locais
+└── wakeword/          Modelo acústico e modelos auxiliares
 ```
 
 ## Documentação
 
-- [Instalação](docs/INSTALACAO.md)
-- [Protocolo bmo/1](docs/PROTOCOLO.md)
-- [Segurança e privacidade](docs/SEGURANCA_E_PRIVACIDADE.md)
-- [Solução de problemas](docs/SOLUCAO_DE_PROBLEMAS.md)
-- [Limitações conhecidas](docs/LIMITACOES.md)
-- [Evidências de teste](docs/EVIDENCIAS_TESTES.md)
+| Documento | Conteúdo |
+|---|---|
+| [Instalação](docs/INSTALACAO.md) | Dependências e preparação do ambiente |
+| [Música](docs/MUSICA.md) | Mopidy e YouTube Music |
+| [Protocolo](docs/PROTOCOLO.md) | Comunicação entre Android e PC |
+| [Segurança](docs/SEGURANCA_E_PRIVACIDADE.md) | Proteções e privacidade |
+| [Solução de problemas](docs/SOLUCAO_DE_PROBLEMAS.md) | Diagnóstico de erros |
+| [Limitações](docs/LIMITACOES.md) | O que ainda precisa ser validado |
+| [Evidências de teste](docs/EVIDENCIAS_TESTES.md) | Resultados dos testes |
 
-## 3D
+## Modelo 3D
 
-Tem que imprimir em escala 113%.
+O projeto também prevê um gabinete físico inspirado no BMO para acomodar o celular.
+
+**Escala de impressão documentada: 113%.**
 
 ## Licença e créditos
 
-Os rostos e o arquivo legado `wakeword_hey_jarvis.onnx` vêm do projeto original `be-more-agent`. Consulte [assets/ORIGINAL_LICENSE](assets/ORIGINAL_LICENSE).
+Os rostos e o arquivo legado `wakeword_hey_jarvis.onnx` são provenientes do projeto original [be-more-agent](https://github.com/brenpoly/be-more-agent). Consulte [assets/ORIGINAL_LICENSE](assets/ORIGINAL_LICENSE).
 
-O detector `wakeword/saturnbmo.onnx` foi treinado com [livekit-wakeword](https://github.com/livekit/livekit-wakeword); os modelos de mel e embedding acompanham o pipeline do livekit. O código deste projeto é de uso local/educacional; revise as licenças das ferramentas e modelos de terceiros (Faster-Whisper, Whisper.cpp, Piper, Ollama, BitChord, livekit-wakeword e modelos baixados) antes de redistribuir.
+O detector `wakeword/saturnbmo.onnx` foi treinado com [livekit-wakeword](https://github.com/livekit/livekit-wakeword). Os modelos auxiliares de mel e embedding acompanham o pipeline do projeto.
+
+O saturnBMO integra ferramentas e modelos de terceiros, incluindo Faster-Whisper, Whisper.cpp, Piper, Ollama, Mopidy, BitChord e livekit-wakeword. Verifique as respectivas licenças antes de redistribuir binários, modelos ou versões modificadas.
+
+---
+
+<div align="center">
+
+**Feito com dedicação para trazer o BMO para a vida real.**
+
+[Repositório](https://github.com/spacexjr/saturnBMO) · [Issues](https://github.com/spacexjr/saturnBMO/issues)
+
+</div>
