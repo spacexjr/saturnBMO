@@ -1,5 +1,7 @@
 # saturnBMO
 
+![saturnBMO](assets/faces/listening/listen%2001.png)
+
 BMO de mesa com rosto animado no Android e processamento de voz/IA no PC.
 
 O celular Android é a interface: mostra o rosto do BMO em paisagem, captura o microfone e reproduz a voz. O PC executa o backend local com detecção de fala, transcrição, LLM, ferramentas e síntese de voz. Áudio e texto da conversa não são enviados para nuvem.
@@ -165,8 +167,8 @@ Para release assinado, veja [Build](#build).
 Atalho de desenvolvimento: o APK debug aceita extras de conexão:
 
 ```bash
-adb shell am start -n com.spacexjr.saturnbmo.debug/com.spacexjr.saturnbmo.MainActivity \
-  --es bmo_host 192.168.0.10 --ei bmo_port 8765 \
+adb shell am start -n com.spacexjr.saturnbmo.debug/com.spacexjr.saturnbmo.MainActivity \\
+  --es bmo_host 192.168.0.10 --ei bmo_port 8765 \\
   --es bmo_token "$(cat backend/data/token)"
 ```
 
@@ -174,8 +176,8 @@ Para teste via USB:
 
 ```bash
 adb reverse tcp:8765 tcp:8765
-adb shell am start -n com.spacexjr.saturnbmo.debug/com.spacexjr.saturnbmo.MainActivity \
-  --es bmo_host 127.0.0.1 --ei bmo_port 8765 \
+adb shell am start -n com.spacexjr.saturnbmo.debug/com.spacexjr.saturnbmo.MainActivity \\
+  --es bmo_host 127.0.0.1 --ei bmo_port 8765 \\
   --es bmo_token "$(cat backend/data/token)"
 ```
 
@@ -268,8 +270,8 @@ Teste E2E com serviços reais (Faster-Whisper, Piper, Ollama e backend):
 
 ```bash
 cd backend
-.venv/bin/python ../scripts/e2e_ws.py \
-  --text "Ei, BMO, que horas são?" \
+.venv/bin/python ../scripts/e2e_ws.py \\
+  --text "Ei, BMO, que horas são?" \\
   --output /tmp/bmo-resposta-e2e.wav
 ```
 
