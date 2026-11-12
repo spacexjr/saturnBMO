@@ -58,7 +58,7 @@ O arquivo `assets/wakeword_hey_jarvis.onnx` é o modelo **“Hey Jarvis”** do 
 
 - A descoberta usa arquivos `.desktop`, XDG, Flatpak e AppImage.
 - O controle de janelas depende do ambiente gráfico. Em **Wayland**, alguns compositores restringem foco, minimizar, maximizar e fechar janelas de outros aplicativos.
-- Fechar aplicativos usa sinais/atalhos suportados pelo ambiente; não há shell arbitrário.
+- Fechar aplicativos usa sinais/atalhos suportados pelo ambiente; não há shell arbitrário.18
 - Processos críticos do sistema são protegidos contra fechamento acidental.
 - Nomes de aplicativos podem variar entre instalações e idiomas.
 - Não há automação de cliques, teclado ou leitura de tela.
@@ -89,6 +89,7 @@ O arquivo `assets/wakeword_hey_jarvis.onnx` é o modelo **“Hey Jarvis”** do 
 - Não há lixeira: exclusão confirmada remove o item.
 - Arquivos binários grandes e codificações exóticas podem não ser lidos corretamente.
 - O seletor de pasta exige sessão gráfica no PC e `kdialog` ou `zenity`.
+- nao cria arquivos  ainda
 
 ## 8. Informações do sistema
 
@@ -99,12 +100,13 @@ O arquivo `assets/wakeword_hey_jarvis.onnx` é o modelo **“Hey Jarvis”** do 
 ## 9. TTS e áudio
 
 - Piper `pt_BR-faber-medium`, 22.050 Hz, quando disponível.
-- Fallback para espeak-ng, com voz mais robótica.
+- Fallback para espeak-ng, com voz mais robótica/
 - A latência depende do texto e do PC.
 - Não há controle de emoção/prosódia além do modelo.
 - O áudio é transmitido em streaming; o app espera o `AudioTrack` consumir os frames.
 - Não há cancelamento de eco (AEC) dedicado. O app silencia o microfone enquanto fala, mas o alto-falante pode vazar para o microfone em volumes altos.
 - Os arquivos `tools/piper/piper_phonemize` e `libtashkeel_model.ort` podem estar como placeholders LFS; o Piper funciona para PT-BR nos testes atuais, mas esses recursos não estão garantidos.
+- Voz do BMO futuramente
 
 ## 10. Android
 
