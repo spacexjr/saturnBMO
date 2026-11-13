@@ -1190,7 +1190,7 @@ private fun DrawScope.drawEmotion(
         BmoFaceEmotion.HAPPY -> drawSparkles(time, particles)
         BmoFaceEmotion.CONFUSED -> drawQuestions(time)
         BmoFaceEmotion.PROCESSING -> drawProcessing(time)
-        BmoFaceEmotion.ERROR -> drawGlitch(time)
+        BmoFaceEmotion.ERROR, BmoFaceEmotion.SCARED -> drawGlitch(time)
         BmoFaceEmotion.LISTENING -> drawListeningWaves(time, faceRect)
         else -> Unit
     }
