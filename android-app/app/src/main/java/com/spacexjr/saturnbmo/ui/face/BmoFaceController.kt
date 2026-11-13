@@ -113,5 +113,6 @@ object BmoFaceController {
         BmoFaceEmotion.SPEAKING -> "speaking"
         BmoFaceEmotion.PROCESSING -> "thinking"
         BmoFaceEmotion.ERROR -> "error"
+        BmoFaceEmotion.SCARED -> "scared"
     }
 }
