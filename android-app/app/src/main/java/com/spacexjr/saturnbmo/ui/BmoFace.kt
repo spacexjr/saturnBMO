@@ -120,7 +120,7 @@ fun BmoFace(
     var blink by remember { mutableStateOf(false) }
     LaunchedEffect(expressionKey, resumed) {
         blink = false
-        if (!resumed || expressionKey != "idle") return@LaunchedEffect
+        if (!resumed) return@LaunchedEffect
         val random = kotlin.random.Random(84)
         while (true) {
             delay(random.nextLong(2600L, 6200L))
