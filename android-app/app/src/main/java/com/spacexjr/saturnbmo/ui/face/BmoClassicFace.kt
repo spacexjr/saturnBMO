@@ -41,12 +41,12 @@ internal fun DrawScope.drawClassicBmoFace(
         cornerRadius = CornerRadius(w * 0.035f, w * 0.035f),
     )
     val insetX = w * 0.075f
-    val insetY = h * 0.105f
+    val insetY = h * 0.075f
     val screenRect = Rect(
         bounds.left + insetX,
         bounds.top + insetY,
         bounds.right - insetX,
-        bounds.bottom - insetY,
+        bounds.bottom - h * 0.275f,
     )
     drawRoundRect(
         color = screen,
@@ -54,6 +54,19 @@ internal fun DrawScope.drawClassicBmoFace(
         size = Size(screenRect.width, screenRect.height),
         cornerRadius = CornerRadius(w * 0.025f, w * 0.025f),
     )
+
+    // Controles físicos coloridos do BMO na parte inferior do gabinete.
+    val controlY = bounds.top + h * 0.865f
+    val dpadX = bounds.left + w * 0.29f
+    val dpad = Color(0xFF278F91)
+    drawRect(dpad, Offset(dpadX - w * 0.012f, controlY - h * 0.045f), Size(w * 0.024f, h * 0.09f))
+    drawRect(dpad, Offset(dpadX - w * 0.038f, controlY - h * 0.012f), Size(w * 0.076f, h * 0.024f))
+    drawCircle(Color(0xFFE85B55), h * 0.027f, Offset(bounds.left + w * 0.70f, controlY))
+    drawCircle(Color(0xFFF2C94C), h * 0.027f, Offset(bounds.left + w * 0.79f, controlY))
+    repeat(3) { index ->
+        drawCircle(Color(0xFF278F91), h * 0.008f,
+            Offset(bounds.left + w * (0.45f + index * 0.035f), controlY))
+    }
 
     val sw = screenRect.width
     val sh = screenRect.height
