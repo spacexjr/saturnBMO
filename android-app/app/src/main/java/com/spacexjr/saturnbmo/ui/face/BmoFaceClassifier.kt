@@ -283,6 +283,7 @@ object BmoFaceClassifier {
     private val excitedWords = listOf("animado", "animada", "empolgado", "empolgada", "eba", "adorei", "vamos la")
     private val sleepyWords = listOf("sono", "dormir", "cansado", "cansada", "boa noite")
     private val confusedWords = listOf("confuso", "confusa", "nao entendi", "nao sei", "duvida")
+    private val scaredWords = listOf("medo", "assustado", "assustada", "apavorado", "apavorada", "com medo")
 
     private fun detectEmotion(user: String, assistant: String): BmoFaceEmotion? {
         val text = user.ifBlank { assistant }
@@ -295,6 +296,7 @@ object BmoFaceClassifier {
             hasAny(text, excitedWords) -> BmoFaceEmotion.EXCITED
             hasAny(text, sleepyWords) -> BmoFaceEmotion.SLEEPY
             hasAny(text, confusedWords) -> BmoFaceEmotion.CONFUSED
+            hasAny(text, scaredWords) -> BmoFaceEmotion.SCARED
             else -> null
         }
     }
