@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -26,7 +27,11 @@ import com.spacexjr.saturnbmo.ui.face.rememberBmoFaceClock
 import com.spacexjr.saturnbmo.ui.face.rememberBmoResumed
 import kotlinx.coroutines.delay
 
-/** Compatibilidade de nomes de estados legados; as expressões agora são desenhadas em Canvas. */
+/**
+ * Seleção de frames dos PNGs originais. Nenhuma arte existente foi substituída:
+ * expressões que não têm arquivo próprio reutilizam o frame mais próximo e
+ * recebem uma camada procedural 8-bit (corações, Zzz, lágrimas etc.).
+ */
 object FaceController {
     fun framesFor(expression: String): List<String> = when (expression.lowercase()) {
         "listening" -> listOf("listening/listen 01.png", "listening/listen 02.png")
@@ -106,7 +111,25 @@ fun BmoFace(
     }
 
     val expressionKey = BmoFaceController.expressionKeyFor(ui, visual)
+    val paths = remember(expressionKey) { FaceController.framesFor(expressionKey) }
+    val frames: List<ImageBitmap> = remember(paths) {
+        paths.mapNotNull { path ->
+            runCatching {
+                context.assets.open("faces/$path").use { stream ->
+                    BitmapFactory.decodeStream(stream)?.asImageBitmap()
+                }
+            }.getOrNull()
+        }
+    }
+    var frameIndex by remember(expressionKey) { mutableIntStateOf(0) }
     val resumed = rememberBmoResumed()
+    LaunchedEffect(expressionKey, frames.size, resumed) {
+        if (!resumed || frames.size <= 1) return@LaunchedEffect
+        while (true) {
+            delay(FaceController.intervalFor(expressionKey))
+            frameIndex = (frameIndex + 1) % frames.size
+        }
+    }
 
     // Arte de nuvens fornecida em assets/faces/clouds.png (fundo transparente).
     val cloudArt: ImageBitmap? = remember {
@@ -120,7 +143,7 @@ fun BmoFace(
     var blink by remember { mutableStateOf(false) }
     LaunchedEffect(expressionKey, resumed) {
         blink = false
-        if (!resumed) return@LaunchedEffect
+        if (!resumed || expressionKey != "idle") return@LaunchedEffect
         val random = kotlin.random.Random(84)
         while (true) {
             delay(random.nextLong(2600L, 6200L))
@@ -135,6 +158,7 @@ fun BmoFace(
             visual.emotion != com.spacexjr.saturnbmo.ui.face.BmoFaceEmotion.NEUTRAL ||
             visual.activity != com.spacexjr.saturnbmo.BmoActivity.NONE,
     )
+    val frame = frames.getOrNull(frameIndex % frames.size.coerceAtLeast(1))
 
     Box(
         modifier = if (fullBleed) {
@@ -144,7 +168,7 @@ fun BmoFace(
         },
     ) {
         BmoFaceRenderer(
-            face = null,
+            face = frame,
             cloudArt = cloudArt,
             visual = visual,
             clock = clock,
