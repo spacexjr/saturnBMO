@@ -28,34 +28,45 @@ import com.spacexjr.saturnbmo.ui.face.rememberBmoResumed
 import kotlinx.coroutines.delay
 
 /**
- * Seleção de frames dos PNGs originais. Nenhuma arte existente foi substituída:
- * expressões que não têm arquivo próprio reutilizam o frame mais próximo e
- * recebem uma camada procedural 8-bit (corações, Zzz, lágrimas etc.).
+ * Seleção de frames das expressões em `assets/faces/`. Cada estado/emoção tem
+ * sua própria pasta com frames numerados; o renderer continua aplicando as
+ * camadas procedurais (Zzz, lágrimas, brilhos, clima) por cima do PNG.
  */
 object FaceController {
     fun framesFor(expression: String): List<String> = when (expression.lowercase()) {
-        "listening" -> listOf("listening/listen 01.png", "listening/listen 02.png")
-        "thinking", "processing" -> listOf(
-            "thinking/thinking 05.png",
-            "thinking/thinking 06.png",
+        "listening" -> listOf("listening/listening_01.png", "listening/listening_02.png")
+        "thinking" -> listOf(
+            "thinking/thinking_01.png",
+            "thinking/thinking_02.png",
+            "thinking/thinking_03.png",
+            "thinking/thinking_04.png",
+            "thinking/thinking_05.png",
+            "thinking/thinking_06.png",
+        )
+        "processing" -> listOf(
+            "thinking/thinking_05.png",
+            "thinking/thinking_06.png",
         )
         "speaking" -> listOf(
-            "speaking/speaking 01.png",
-            "speaking/speaking 02.png",
-            "speaking/speaking 03.png",
+            "speaking/speaking_01.png",
+            "speaking/speaking_02.png",
+            "speaking/speaking_03.png",
+            "speaking/speaking_04.png",
         )
-        "error" -> listOf("error/error 01.png")
-        "warmup", "connecting", "reconnecting" -> listOf("warmup/warmup 01.png")
-        "happy", "excited", "love" ->
-            listOf("listening/listen 01.png", "listening/listen 02.png")
-        "sad", "confused", "angry" ->
-            listOf("thinking/thinking 03.png", "thinking/thinking 04.png")
-        "surprised" -> listOf("capturing/capturing 01.png")
-        "sleepy", "sleeping" ->
-            listOf("sleeping/sleeping 01.png", "sleeping/sleeping 02.png")
-        "neutral" -> listOf("idle/idle 01.png")
-        "capturing" -> listOf("capturing/capturing 01.png")
-        else -> listOf("idle/idle 01.png")
+        "error" -> listOf("error/error_01.png")
+        "warmup", "connecting", "reconnecting" -> listOf("warmup/warmup_01.png")
+        "happy" -> listOf("happy/happy_01.png", "happy/happy_02.png")
+        "excited" -> listOf("excited/excited_01.png", "excited/excited_02.png")
+        "love" -> listOf("love/love_01.png", "love/love_02.png")
+        "sad" -> listOf("sad/sad_01.png", "sad/sad_02.png")
+        "confused" -> listOf("confused/confused_01.png", "confused/confused_02.png")
+        "angry" -> listOf("angry/angry_01.png", "angry/angry_02.png")
+        "surprised" -> listOf("surprised/surprised_01.png")
+        "sleepy" -> listOf("sleepy/sleepy_01.png", "sleepy/sleepy_02.png")
+        "sleeping" -> listOf("sleeping/sleeping_01.png", "sleeping/sleeping_02.png")
+        "neutral" -> listOf("idle/idle_01.png")
+        "capturing" -> listOf("capturing/capturing_01.png")
+        else -> listOf("idle/idle_01.png")
     }
 
     fun intervalFor(expression: String): Long = when (expression.lowercase()) {
@@ -63,8 +74,12 @@ object FaceController {
         "speaking" -> 130
         "listening" -> 380
         "sleepy", "sleeping" -> 900
-        "happy", "excited", "love" -> 420
-        "sad", "confused", "angry" -> 520
+        "happy" -> 420
+        "excited" -> 300
+        "love" -> 520
+        "sad" -> 620
+        "confused" -> 560
+        "angry" -> 380
         "warmup", "connecting", "reconnecting" -> 500
         else -> 700
     }

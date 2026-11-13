@@ -1397,9 +1397,9 @@ private fun DrawScope.drawListeningWaves(time: Long, faceRect: Rect) {
 private fun DrawScope.drawEyelids(faceRect: Rect, closed: Float) {
     listOf(0.272f, 0.727f).forEach { nx ->
         val cx = faceRect.left + faceRect.width * nx
-        val cy = faceRect.top + faceRect.height * 0.4f
-        val width = faceRect.width * 0.085f
-        val height = faceRect.height * 0.075f
+        val cy = faceRect.top + faceRect.height * 0.39f
+        val width = faceRect.width * 0.10f
+        val height = faceRect.height * 0.138f
         val lidY = cy - height / 2f + height * closed
         drawRect(
             BmoGreen,
