@@ -59,6 +59,7 @@ enum class BmoFaceEmotion {
     SPEAKING,
     PROCESSING,
     ERROR,
+    SCARED,
 }
 
 /**
