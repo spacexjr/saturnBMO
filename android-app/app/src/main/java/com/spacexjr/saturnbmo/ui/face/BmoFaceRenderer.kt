@@ -104,18 +104,35 @@ fun BmoFaceRenderer(
             val faceRect = fitRect(size, face)
 
             drawRect(BmoGreen)
-            // Face clássica do BMO desenhada em Canvas: sem imagens genéricas
-            // ou dependência de sprites externos. O desenho é leve no Galaxy A22.
-            drawClassicBmoFace(
-                bounds = faceRect,
-                emotion = visual.emotion,
-                time = time,
-                micLevel = micLevel,
-                blink = blink,
-            )
+            if (face != null) {
+                val jitter = when (visual.theme) {
+                    BmoFaceTheme.COLD -> sin(time / 90f) * 2.2f
+                    BmoFaceTheme.HOT -> sin(time / 120f) * 1.2f
+                    else -> 0f
+                }
+                drawImage(
+                    image = face,
+                    srcOffset = IntOffset.Zero,
+                    srcSize = IntSize(face.width, face.height),
+                    dstOffset = IntOffset(
+                        (faceRect.left + jitter).roundToInt(),
+                        faceRect.top.roundToInt(),
+                    ),
+                    dstSize = IntSize(
+                        faceRect.width.roundToInt(),
+                        faceRect.height.roundToInt(),
+                    ),
+                    filterQuality = FilterQuality.None,
+                )
+            }
+
+            if (blink) {
+                drawEyelids(faceRect, 1f)
+            }
 
             drawTheme(visual.theme, time, faceRect, particles, micLevel, cloudArt)
             drawActivity(visual.activity, time, faceRect, micLevel)
+            drawEmotion(visual.emotion, visual.theme, time, faceRect, particles)
         }
 
         FaceReadouts(visual, Modifier.fillMaxSize())
