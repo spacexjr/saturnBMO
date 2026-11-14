@@ -2,7 +2,7 @@
 
 # saturnBMO
 
-<img src="assets/faces/listening/listen%2001.png" alt="Rosto do saturnBMO" width="360">
+<img src="assets/faces/happy/happy_02.png" alt="Rosto do saturnBMO" width="360">
 
 ### Seu BMO de mesa: Android na interface, Linux no cérebro.
 
