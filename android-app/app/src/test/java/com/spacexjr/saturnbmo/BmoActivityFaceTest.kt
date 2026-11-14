@@ -81,4 +81,53 @@ class BmoActivityFaceTest {
         assertEquals(BmoActivity.SUCCESS, visual.activity)
         assertEquals(BmoFaceEmotion.HAPPY, visual.emotion)
     }
+
+    @Test
+    fun expressaoPedidaPeloModeloVenceOEstadoAutomatico() {
+        val ui = BmoUiState(
+            faceState = BmoState.SPEAKING,
+            faceExpression = "happy",
+        )
+        val visual = BmoFaceController.visualFor(ui)
+        assertEquals(BmoFaceEmotion.HAPPY, visual.emotion)
+        assertEquals("happy", BmoFaceController.expressionKeyFor(ui, visual))
+    }
+
+    @Test
+    fun erroContinuaVencendoExpressaoDoModelo() {
+        val ui = BmoUiState(
+            faceState = BmoState.ERROR,
+            faceExpression = "love",
+        )
+        val visual = BmoFaceController.visualFor(ui)
+        assertEquals(BmoFaceEmotion.ERROR, visual.emotion)
+        assertEquals("error", BmoFaceController.expressionKeyFor(ui, visual))
+    }
+
+    @Test
+    fun expressaoDoModeloNaoFicaPresaQuandoOResetChega() {
+        val withModel = BmoUiState(
+            faceState = BmoState.IDLE,
+            faceExpression = "confused",
+        )
+        assertEquals(
+            "confused",
+            BmoFaceController.expressionKeyFor(withModel, BmoFaceController.visualFor(withModel)),
+        )
+
+        val restored = withModel.copy(faceExpression = null, faceLabel = "")
+        val visual = BmoFaceController.visualFor(restored)
+        assertEquals(BmoFaceEmotion.NEUTRAL, visual.emotion)
+        assertEquals("idle", BmoFaceController.expressionKeyFor(restored, visual))
+    }
+
+    @Test
+    fun codigoDaFaceAceitaCanonicoEApelidos() {
+        assertEquals(BmoFaceEmotion.HAPPY, BmoFaceEmotion.fromCode("happy"))
+        assertEquals(BmoFaceEmotion.HAPPY, BmoFaceEmotion.fromCode("feliz"))
+        assertEquals(BmoFaceEmotion.PROCESSING, BmoFaceEmotion.fromCode("processando"))
+        assertEquals(BmoFaceEmotion.SLEEPY, BmoFaceEmotion.fromCode("sonolento"))
+        assertNull(BmoFaceEmotion.fromCode("dançando"))
+        assertNull(BmoFaceEmotion.fromCode(null))
+    }
 }

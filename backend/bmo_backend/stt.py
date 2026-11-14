@@ -8,11 +8,13 @@ usado no Android em nenhuma hipótese.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
 import tempfile
 import unicodedata
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -79,9 +81,20 @@ class FasterWhisperStt:
         if not self.hotwords:
             self.hotwords = self.initial_prompt
         self.timeout_s = float(config.get("timeout_s", 180))
+        # Limita o número de threads do CTranslate2. Sem isto o modelo
+        # "medium" ocupava todos os núcleos e travava o servidor em uma
+        # transcrição, derrubando também o WebSocket e o /health.
+        self.cpu_threads = int(config.get("cpu_threads", 4) or 4)
         self._model: Any = None
         self._load_error: str | None = None
         self._lock = asyncio.Lock()
+        # Uma única thread de inferência: impede que timeouts empilhem
+        # transcrições concorrentes (era o que gerava 8 threads a 99% CPU).
+        self._executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="bmo-stt",
+        )
+        self._pending: Future[Any] | None = None
 
     def _import_available(self) -> bool:
         try:
@@ -102,6 +115,7 @@ class FasterWhisperStt:
             "compute_type": self.compute_type,
             "language": "auto" if self.auto_language else self.language,
             "beam_size": self.beam_size,
+            "cpu_threads": self.cpu_threads,
             "vad_filter": self.vad_filter,
             "condition_on_previous_text": self.condition_on_previous_text,
             "initial_prompt": self.initial_prompt,
@@ -132,6 +146,7 @@ class FasterWhisperStt:
                 device=self.device,
                 compute_type=self.compute_type,
                 num_workers=self.num_workers,
+                cpu_threads=self.cpu_threads,
             )
             log.info("Faster-Whisper carregado.")
         except Exception as exc:  # noqa: BLE001
@@ -148,14 +163,26 @@ class FasterWhisperStt:
             return await _transcribe_or_fail(self, pcm, sample_rate)
         duration_ms = int(len(pcm) / 2 / sample_rate * 1000)
         async with self._lock:
+            if self._pending is not None and not self._pending.done():
+                raise SttError(
+                    "O reconhecimento anterior ainda está em andamento; "
+                    "áudio descartado para não sobrecarregar a CPU."
+                )
+            loop = asyncio.get_running_loop()
+            self._pending = self._executor.submit(
+                self._transcribe_sync, pcm, sample_rate
+            )
             try:
                 text, language = await asyncio.wait_for(
-                    asyncio.get_running_loop().run_in_executor(
-                        None, self._transcribe_sync, pcm, sample_rate
-                    ),
+                    asyncio.wrap_future(self._pending, loop=loop),
                     timeout=self.timeout_s,
                 )
             except asyncio.TimeoutError as exc:
+                log.warning(
+                    "Faster-Whisper excedeu %.0fs; a inferência continuará em "
+                    "segundo plano e novos áudios serão recusados até terminar.",
+                    self.timeout_s,
+                )
                 raise SttError("Tempo limite do Faster-Whisper excedido.") from exc
             except (SttUnavailable, SttError):
                 raise
@@ -190,6 +217,8 @@ class FasterWhisperStt:
 
     async def close(self) -> None:
         self._model = None
+        with contextlib.suppress(Exception):
+            self._executor.shutdown(wait=False, cancel_futures=True)
 
 
 class WhisperCppStt:

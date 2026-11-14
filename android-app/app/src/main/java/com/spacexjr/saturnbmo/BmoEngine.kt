@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.location.Location
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.spacexjr.saturnbmo.audio.AudioCapture
@@ -13,6 +14,7 @@ import com.spacexjr.saturnbmo.audio.AudioPlayer
 import com.spacexjr.saturnbmo.location.BmoLocation
 import com.spacexjr.saturnbmo.net.BmoClient
 import com.spacexjr.saturnbmo.net.ServerDiscovery
+import com.spacexjr.saturnbmo.ui.face.BmoFaceEmotion
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -73,12 +75,19 @@ class BmoEngine private constructor(context: Context) {
     private var connectTimeoutJob: Job? = null
     private var playbackJob: Job? = null
     private var mediaPollJob: Job? = null
+    private var faceExpiryJob: Job? = null
+    private var captureRecoveryJob: Job? = null
+    private var captureRecoveryAttempt = 0
     private var wantListening = false
     private var manualDisconnect = false
     private var captureForTest = false
     private var lastSeq = -1L
     private var currentAssistantId = ""
     private var audioStarted = false
+    private var audioStreamEnded = false
+    private var playbackDoneSent = false
+    private var audioStreamId = 0
+    private var currentDurationMs = 0L
     private var currentSampleRate = 22050
     private var currentChannels = 1
     @Volatile
@@ -121,14 +130,23 @@ class BmoEngine private constructor(context: Context) {
         mediaPollJob = null
         client?.close()
         client = null
-        stopCaptureInternal(sendEnd = false)
-        player.stop()
+        // Uma reconexão automática preserva o AudioRecord: recriar o microfone a
+        // cada queda era o que deixava a conversa seguinte sem captura.
+        if (!automatic) {
+            wantListening = false
+            stopCaptureInternal(sendEnd = false)
+            cancelCaptureRecovery()
+        }
+        stopLocalPlayback()
+        clearModelFace()
         if (!settings.isConfigured) {
             _ui.update {
                 it.copy(
                     connection = ConnectionState.DISCONNECTED,
                     bmoState = BmoState.DISCONNECTED,
                     faceState = BmoState.DISCONNECTED,
+                    listening = false,
+                    listeningRequested = false,
                     statusDetail = "Configure o endereço do PC nas opções.",
                     lastError = "Servidor não configurado.",
                 )
@@ -142,6 +160,8 @@ class BmoEngine private constructor(context: Context) {
                 connection = if (automatic) ConnectionState.RECONNECTING else ConnectionState.CONNECTING,
                 bmoState = BmoState.CONNECTING,
                 faceState = BmoState.CONNECTING,
+                listening = if (automatic) it.listening else false,
+                listeningRequested = if (automatic) it.listeningRequested else false,
                 statusDetail = "Conectando a ${settings.host}:${settings.port}...",
                 lastError = null,
             )
@@ -183,8 +203,10 @@ class BmoEngine private constructor(context: Context) {
         wantListening = false
         reconnectJob?.cancel()
         connectTimeoutJob?.cancel()
-        playbackJob?.cancel()
+        cancelCaptureRecovery()
         stopCaptureInternal(sendEnd = false)
+        stopLocalPlayback()
+        clearModelFace()
         stopMicTest()
         player.stop()
         mediaPollJob?.cancel()
@@ -196,7 +218,10 @@ class BmoEngine private constructor(context: Context) {
                 connection = ConnectionState.DISCONNECTED,
                 bmoState = BmoState.DISCONNECTED,
                 faceState = BmoState.DISCONNECTED,
+                faceExpression = null,
+                faceLabel = "",
                 listening = false,
+                listeningRequested = false,
                 statusDetail = "Desconectado.",
                 micLevel = 0f,
                 pendingConfirmation = null,
@@ -217,7 +242,12 @@ class BmoEngine private constructor(context: Context) {
      */
     fun requestListening(): Boolean {
         wantListening = true
-        if (_ui.value.connected) return startListening()
+        _ui.update { it.copy(listeningRequested = true) }
+        if (_ui.value.connected) {
+            val started = startListening()
+            if (!started) scheduleCaptureRecovery()
+            return started
+        }
         if (settings.isConfigured) {
             addLog("INFO", "Escuta solicitada; aguardando conexão com o PC.")
             ensureConnected()
@@ -241,20 +271,32 @@ class BmoEngine private constructor(context: Context) {
         connectTimeoutJob?.cancel()
         client?.close()
         client = null
-        stopCaptureInternal(sendEnd = false)
-        player.stop()
-        playbackJob?.cancel()
+        // Falhas de rede mantêm o microfone vivo; ele só é encerrado em
+        // desconexão manual ou quando o servidor recusa autenticação/protocolo.
+        if (!allowReconnect) {
+            wantListening = false
+            cancelCaptureRecovery()
+            stopCaptureInternal(sendEnd = false)
+        }
+        stopLocalPlayback()
+        clearModelFace()
         mediaPollJob?.cancel()
         mediaPollJob = null
+        val keepCapture = allowReconnect && wantListening && capture?.isRunning == true
         _ui.update {
             it.copy(
                 connection = if (allowReconnect && settings.autoConnect && settings.isConfigured)
                     ConnectionState.RECONNECTING else ConnectionState.DISCONNECTED,
                 bmoState = BmoState.DISCONNECTED,
                 faceState = BmoState.DISCONNECTED,
-                listening = false,
+                faceExpression = null,
+                faceLabel = "",
+                listening = keepCapture,
+                listeningRequested = allowReconnect && wantListening,
                 micLevel = 0f,
-                statusDetail = message,
+                statusDetail = if (keepCapture)
+                    "Conexão perdida. O microfone será retomado ao reconectar."
+                else message,
                 lastError = message,
                 pendingConfirmation = null,
                 activity = null,
@@ -335,10 +377,16 @@ class BmoEngine private constructor(context: Context) {
             return false
         }
         if (!hasMicrophonePermission()) {
+            _ui.update { it.copy(listeningRequested = false) }
             fail("Permissão de microfone não concedida. Autorize em Configurações do Android.")
             return false
         }
         if (capture?.isRunning == true) return true
+        // Captura antiga que morreu por falha de leitura: descarta antes de abrir outra.
+        capture?.let { stale ->
+            capture = null
+            stale.stop()
+        }
         stopMicTest()
         val newCapture = AudioCapture(appContext, object : AudioCapture.Listener {
             override fun onLevel(level: Float) {
@@ -346,31 +394,27 @@ class BmoEngine private constructor(context: Context) {
             }
 
             override fun onPcm(bytes: ByteArray) {
-                if (!captureForTest && _ui.value.listening && !audioMuted) {
+                // `wantListening` mantém o envio durante uma reconexão do WebSocket;
+                // se o cliente estiver nulo, o bloco é descartado.
+                if (!captureForTest && wantListening && !audioMuted) {
                     client?.sendBytes(bytes)
                 }
             }
 
             override fun onError(message: String) {
-                fail(message)
-                stopCaptureInternal(sendEnd = false)
+                scope.launch { handleCaptureFailure(message) }
             }
         })
         if (!newCapture.start()) {
             _ui.update { it.copy(micLevel = 0f) }
+            scheduleCaptureRecovery()
             return false
         }
         capture = newCapture
         captureForTest = false
         wantListening = true
-        val sent = sendJson(
-            JSONObject()
-                .put("type", "audio.start")
-                .put("format", "pcm_s16le")
-                .put("sample_rate", AudioCapture.SAMPLE_RATE)
-                .put("channels", AudioCapture.CHANNELS)
-        )
-        if (!sent) {
+        captureRecoveryAttempt = 0
+        if (!sendAudioStart()) {
             newCapture.stop()
             capture = null
             fail("Não foi possível avisar o servidor sobre o áudio.")
@@ -381,6 +425,7 @@ class BmoEngine private constructor(context: Context) {
         _ui.update {
             it.copy(
                 listening = true,
+                listeningRequested = true,
                 bmoState = BmoState.LISTENING,
                 faceState = BmoState.LISTENING,
                 statusDetail = "Microfone ativo. Diga \"Ei, BMO\".",
@@ -391,14 +436,25 @@ class BmoEngine private constructor(context: Context) {
         return true
     }
 
+    private fun sendAudioStart(): Boolean = sendJson(
+        JSONObject()
+            .put("type", "audio.start")
+            .put("format", "pcm_s16le")
+            .put("sample_rate", AudioCapture.SAMPLE_RATE)
+            .put("channels", AudioCapture.CHANNELS)
+    )
+
     fun stopListening() {
         wantListening = false
+        cancelCaptureRecovery()
+        _ui.update { it.copy(listeningRequested = false) }
         if (capture?.isRunning != true && !_ui.value.listening) return
         stopCaptureInternal(sendEnd = true)
         stopMicTest()
         _ui.update {
             it.copy(
                 listening = false,
+                listeningRequested = false,
                 micLevel = 0f,
                 bmoState = if (it.bmoState == BmoState.LISTENING) BmoState.IDLE else it.bmoState,
                 faceState = if (it.faceState == BmoState.LISTENING) BmoState.IDLE else it.faceState,
@@ -420,6 +476,143 @@ class BmoEngine private constructor(context: Context) {
         if (sendEnd) sendJson(JSONObject().put("type", "audio.end"))
     }
 
+    private fun cancelCaptureRecovery() {
+        captureRecoveryJob?.cancel()
+        captureRecoveryJob = null
+        captureRecoveryAttempt = 0
+    }
+
+    private fun handleCaptureFailure(message: String) {
+        if (manualDisconnect) return
+        if (!wantListening) {
+            addLog("AVISO", message)
+            return
+        }
+        val current = capture
+        if (current != null && current.isRunning) {
+            // Callback atrasado de uma captura antiga; a atual continua válida.
+            return
+        }
+        capture = null
+        // Libera o AudioRecord que falhou antes de tentar abrir outro.
+        current?.stop()
+        captureForTest = false
+        _ui.update {
+            it.copy(
+                listening = false,
+                listeningRequested = true,
+                micLevel = 0f,
+                statusDetail = "Microfone indisponível; reiniciando...",
+                lastError = message,
+            )
+        }
+        addLog("ERRO", message)
+        scheduleCaptureRecovery()
+    }
+
+    /** Recria o AudioRecord com espera progressiva, sem encerrar a sessão. */
+    private fun scheduleCaptureRecovery() {
+        if (!wantListening || manualDisconnect) return
+        if (captureRecoveryJob?.isActive == true) return
+        if (!hasMicrophonePermission()) {
+            wantListening = false
+            _ui.update { it.copy(listeningRequested = false) }
+            addLog("ERRO", "Sem permissão de microfone; recuperação cancelada.")
+            return
+        }
+        captureRecoveryJob = scope.launch {
+            var attempt = 0
+            while (wantListening && !manualDisconnect) {
+                if (capture?.isRunning == true) break
+                if (!_ui.value.connected) {
+                    delay(1000)
+                    continue
+                }
+                val waitMs = min(10_000L, 500L * (1 shl min(attempt, 4)))
+                addLog("AVISO", "Reiniciando microfone em ${waitMs / 1000.0}s.")
+                delay(waitMs)
+                if (!wantListening || manualDisconnect) break
+                if (!_ui.value.connected) {
+                    attempt++
+                    continue
+                }
+                if (startListening()) {
+                    addLog("INFO", "Microfone restaurado após falha.")
+                    captureRecoveryAttempt = 0
+                    break
+                }
+                attempt++
+            }
+        }
+    }
+
+    private fun resetStreamState() {
+        audioStarted = false
+        audioStreamEnded = false
+        playbackDoneSent = false
+    }
+
+    /**
+     * Interrompe a reprodução local e invalida o job antigo. O incremento do id
+     * evita que o `finally` de um stream antigo pare o AudioTrack do próximo.
+     */
+    private fun stopLocalPlayback() {
+        audioStreamId++
+        playbackJob?.cancel()
+        playbackJob = null
+        player.stop()
+        resetStreamState()
+        setAudioMuted(false)
+        _ui.update { it.copy(audioPlaying = false, vadSpeaking = false) }
+    }
+
+    private fun clearModelFace() {
+        faceExpiryJob?.cancel()
+        faceExpiryJob = null
+        if (_ui.value.faceExpression != null || _ui.value.faceLabel.isNotEmpty()) {
+            _ui.update { it.copy(faceExpression = null, faceLabel = "") }
+        }
+    }
+
+    private fun handleModelFace(json: JSONObject) {
+        val emotion = BmoFaceEmotion.fromCode(json.optString("expression"))
+        if (emotion == null) {
+            addLog("AVISO", "Expressão facial inválida recebida do servidor.")
+            return
+        }
+        val expression = emotion.name.lowercase(Locale.ROOT)
+        val label = json.optString("label").ifBlank { expression }
+        val holdMs = json.optLong("hold_ms", 8000L).coerceIn(500L, 60_000L)
+        faceExpiryJob?.cancel()
+        _ui.update { it.copy(faceExpression = expression, faceLabel = label) }
+        addLog("INFO", "Expressão facial: $label.")
+        // Mesmo que o backend não envie face.restore, a expressão não fica presa.
+        faceExpiryJob = scope.launch {
+            delay(holdMs + 2_000L)
+            if (_ui.value.faceExpression == expression) {
+                _ui.update { it.copy(faceExpression = null, faceLabel = "") }
+                addLog("INFO", "Expressão facial voltou ao estado automático.")
+            }
+        }
+    }
+
+    private fun handleFaceRestore(json: JSONObject) {
+        val expression = BmoFaceEmotion.fromCode(json.optString("expression"))?.name?.lowercase(Locale.ROOT)
+        val graceMs = json.optLong("grace_ms", 0L).coerceIn(0L, 10_000L)
+        faceExpiryJob?.cancel()
+        faceExpiryJob = null
+        if (graceMs <= 0L) {
+            clearModelFace()
+            return
+        }
+        faceExpiryJob = scope.launch {
+            delay(graceMs)
+            if (expression == null || _ui.value.faceExpression == expression) {
+                _ui.update { it.copy(faceExpression = null, faceLabel = "") }
+            }
+        }
+    }
+
     fun activateOnce() {
         if (!_ui.value.connected) {
             fail("Conecte-se ao PC antes de falar.")
@@ -429,6 +622,7 @@ class BmoEngine private constructor(context: Context) {
             if (!startListening()) return
         }
         if (_ui.value.bmoState == BmoState.SPEAKING) interrupt()
+        clearModelFace()
         sendJson(JSONObject().put("type", "activate"))
         _ui.update {
             it.copy(
@@ -530,6 +724,7 @@ class BmoEngine private constructor(context: Context) {
             val sent = sendJson(JSONObject().put("type", "text").put("text", clean))
             if (sent) {
                 currentAssistantId = ""
+                clearModelFace()
                 _ui.update {
                     it.copy(
                         transcript = clean,
@@ -547,9 +742,8 @@ class BmoEngine private constructor(context: Context) {
 
     fun interrupt() {
         if (_ui.value.connected) sendJson(JSONObject().put("type", "interrupt"))
-        playbackJob?.cancel()
-        player.stop()
-        setAudioMuted(false)
+        stopLocalPlayback()
+        clearModelFace()
         _ui.update {
             it.copy(
                 bmoState = if (it.listening) BmoState.LISTENING else BmoState.IDLE,
@@ -758,29 +952,31 @@ class BmoEngine private constructor(context: Context) {
     }
 
     private fun fetchMedia(): Result<MusicInfo> = runCatching {
-        // /api/music/state traz posição, duração e fila reais do Mopidy.
-        // /api/v1/media continua como fallback para o player MPRIS antigo.
-        val primary = Request.Builder()
-            .url("${settings.httpUrl}/api/music/state")
+        // /api/music/state traz o Mopidy; /api/v1/media cobre o player MPRIS
+        // (navegador/VLC/BitChord). Consulta os dois: antes, um Mopidy parado
+        // escondia a música que estava tocando em outro aplicativo.
+        val primary = runCatching { requestMusicInfo("/api/music/state") }
+        val fallback = runCatching { requestMusicInfo("/api/v1/media") }
+        val candidates = listOfNotNull(primary.getOrNull(), fallback.getOrNull())
+        candidates.firstOrNull { it.isPlaying }
+            ?: primary.getOrNull()
+            ?: fallback.getOrNull()
+            ?: throw (primary.exceptionOrNull()
+                ?: fallback.exceptionOrNull()
+                ?: IllegalStateException("Nenhum player de música respondeu."))
+    }
+
+    private fun requestMusicInfo(path: String): MusicInfo {
+        val request = Request.Builder()
+            .url("${settings.httpUrl}$path")
             .header("Authorization", "Bearer ${settings.token}")
             .build()
-        http.newCall(primary).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (response.isSuccessful) return@use parseMusic(JSONObject(body))
-            if (response.code != 404 && response.code != 503) {
-                throw IllegalStateException(httpMessage(response.code, body))
-            }
-        }
-        val fallback = Request.Builder()
-            .url("${settings.httpUrl}/api/v1/media")
-            .header("Authorization", "Bearer ${settings.token}")
-            .build()
-        http.newCall(fallback).execute().use { response ->
+        http.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 throw IllegalStateException(httpMessage(response.code, body))
             }
-            parseMusic(JSONObject(body))
+            return parseMusic(JSONObject(body))
         }
     }
 
@@ -952,9 +1148,21 @@ class BmoEngine private constructor(context: Context) {
 
     private fun applyMedia(result: Result<MusicInfo>) {
         result.onSuccess { music ->
+            val before = _ui.value.music
             _ui.update { state ->
                 val merged = mergeMusic(state.music, music)
                 if (merged == state.music) state else state.copy(music = merged)
+            }
+            if (before?.isPlaying != true && music.isPlaying) {
+                addLog(
+                    "INFO",
+                    "Música tocando: ${listOf(music.title, music.artist).filter { it.isNotBlank() }.joinToString(" — ").ifBlank { music.player }}",
+                )
+            } else if (before?.isPlaying == true && !music.isPlaying) {
+                addLog("INFO", "Música pausada ou parada.")
+                // O sono conta a partir do fim da música, não do último evento
+                // de conversa (que pode ter sido há muitos minutos).
+                _ui.update { it.copy(lastActivityAtMs = SystemClock.elapsedRealtime()) }
             }
         }
     }
@@ -1053,11 +1261,20 @@ class BmoEngine private constructor(context: Context) {
             if (seq <= lastSeq) return
             lastSeq = seq
         }
-        when (val type = json.optString("type")) {
+        val type = json.optString("type")
+        // Só eventos de conversa, operação ou música contam como atividade.
+        // Ruído do microfone (vad, transcrição vazia, wakeword.not_detected)
+        // não pode reiniciar o relógio do sono, senão o BMO nunca dorme com o
+        // microfone ativo esperando a wake word.
+        if (isActivityEvent(type, json)) {
+            _ui.update { it.copy(lastActivityAtMs = SystemClock.elapsedRealtime()) }
+        }
+        when (type) {
             "hello" -> handleHello(json)
             "state" -> handleState(json)
             "transcript" -> {
                 val value = json.optString("text")
+                clearModelFace()
                 _ui.update {
                     it.copy(
                         transcript = value,
@@ -1101,42 +1318,92 @@ class BmoEngine private constructor(context: Context) {
                 val channels = json.optInt("channels", 1)
                 currentSampleRate = rate
                 currentChannels = channels
+                currentDurationMs = json.optLong("duration_ms", 0L)
+                // Novo stream invalida qualquer job anterior antes de tocar o novo.
+                audioStreamId += 1
+                val streamId = audioStreamId
+                playbackJob?.cancel()
+                playbackJob = null
+                player.stop()
+                resetStreamState()
                 audioStarted = player.start(rate, channels, settings.volume)
                 setAudioMuted(true)
                 _ui.update {
                     it.copy(
                         bmoState = BmoState.SPEAKING,
                         faceState = BmoState.SPEAKING,
+                        audioPlaying = audioStarted,
                         statusDetail = "Falando...",
                     )
                 }
-                if (!audioStarted) addLog("ERRO", "O aparelho não conseguiu abrir a saída de áudio.")
+                if (audioStarted) {
+                    startPlaybackJob(streamId)
+                } else {
+                    audioStarted = false
+                    addLog("ERRO", "O aparelho não conseguiu abrir a saída de áudio.")
+                }
                 addLog("INFO", "Áudio do BMO recebido (${json.optInt("duration_ms", 0)} ms, $rate Hz).")
             }
+            "audio.end" -> {
+                // O servidor terminou de enviar; a reprodução só acaba depois que
+                // o AudioTrack consumir a fila (ver startPlaybackJob).
+                audioStreamEnded = true
+                if (!audioStarted && !playbackDoneSent) {
+                    playbackDoneSent = true
+                    sendJson(JSONObject().put("type", "playback.done"))
+                    setAudioMuted(false)
+                }
+                _ui.update {
+                    if (it.bmoState == BmoState.SPEAKING) {
+                        it.copy(statusDetail = "Finalizando áudio...")
+                    } else {
+                        it
+                    }
+                }
+            }
             "audio.stop" -> {
-                playbackJob?.cancel()
-                player.stop()
-                setAudioMuted(false)
+                stopLocalPlayback()
                 _ui.update {
                     it.copy(
                         bmoState = if (it.listening) BmoState.LISTENING else BmoState.IDLE,
                         faceState = if (it.listening) BmoState.LISTENING else BmoState.IDLE,
+                        audioPlaying = false,
                         statusDetail = "Áudio interrompido.",
                     )
                 }
                 addLog("INFO", "Reprodução interrompida pelo servidor.")
             }
             "audio.unavailable" -> {
-                _ui.update { it.copy(ttsAvailable = false) }
+                // Sem TTS não há playback.done: libera o microfone imediatamente.
+                stopLocalPlayback()
+                _ui.update {
+                    it.copy(
+                        ttsAvailable = false,
+                        bmoState = if (it.listening) BmoState.LISTENING else BmoState.IDLE,
+                        faceState = if (it.listening) BmoState.LISTENING else BmoState.IDLE,
+                        audioPlaying = false,
+                    )
+                }
                 addLog("AVISO", json.optString("message", "Resposta sem áudio."))
             }
+            "face" -> handleModelFace(json)
+            "face.restore" -> handleFaceRestore(json)
             "vad" -> {
                 val speaking = json.optBoolean("speaking")
                 _ui.update {
-                    it.copy(statusDetail = if (speaking) "Ouvindo sua fala..." else "Processando...")
+                    it.copy(
+                        vadSpeaking = speaking,
+                        statusDetail = when {
+                            speaking -> "Ouvindo sua fala..."
+                            it.faceState == BmoState.THINKING -> "Processando..."
+                            it.listening -> "Aguardando \"Ei, BMO\"."
+                            else -> it.statusDetail
+                        },
+                    )
                 }
             }
             "wakeword.detected" -> {
+                clearModelFace()
                 _ui.update { it.copy(statusDetail = "Palavra de ativação reconhecida.") }
                 addLog("INFO", "Palavra de ativação detectada.")
             }
@@ -1201,6 +1468,27 @@ class BmoEngine private constructor(context: Context) {
         }
     }
 
+    /**
+     * Eventos que representam interação real. `vad`, `pong`, transcrição
+     * vazia e `wakeword.not_detected` ficam de fora de propósito: são ruído
+     * de fundo e impediriam o sono com o microfone ativo.
+     */
+    private fun isActivityEvent(type: String, json: JSONObject): Boolean = when (type) {
+        "hello", "assistant.text.delta", "assistant.text.done",
+        "audio.start", "audio.end", "audio.stop", "audio.unavailable",
+        "face", "face.restore", "activity", "confirmation.request",
+        "confirmation.result", "request.accepted", "error", "history.reset",
+        "wakeword.detected", "wakeword.activated" -> true
+        "transcript" -> json.optString("text").isNotBlank()
+        "music" -> {
+            val status = json.optString("status")
+            status.equals("playing", ignoreCase = true) ||
+                status.equals("paused", ignoreCase = true) ||
+                json.optString("title").isNotBlank()
+        }
+        else -> false
+    }
+
     private fun handleHello(json: JSONObject) {
         val protocol = json.optString("protocol")
         if (protocol.isNotEmpty() && protocol != "bmo/1") {
@@ -1215,20 +1503,41 @@ class BmoEngine private constructor(context: Context) {
                 connection = ConnectionState.CONNECTED,
                 bmoState = BmoState.IDLE,
                 faceState = BmoState.IDLE,
-                statusDetail = "Conectado ao PC. Toque em Ouvir para começar.",
+                vadSpeaking = false,
+                audioPlaying = false,
+                statusDetail = "Conectado ao PC.",
                 reconnectAttempt = 0,
                 lastError = null,
                 serverSessionId = session,
             )
         }
         addLog("INFO", "Conectado ao backend (protocolo $protocol, sessão $session).")
+        resetStreamState()
         refreshServiceStatus()
         refreshFolderStatus()
         refreshMedia()
         refreshLocation()
         startMediaPolling()
-        if (wantListening && capture?.isRunning != true) {
-            startListening()
+        if (wantListening) {
+            if (capture?.isRunning == true) {
+                // Reconexão: o AudioRecord continuou vivo, mas a nova sessão do
+                // backend ainda não sabe disso. Reanuncia o áudio sem recriar nada.
+                if (sendAudioStart()) {
+                    sendCurrentLocation()
+                    _ui.update {
+                        it.copy(
+                            listening = true,
+                            listeningRequested = true,
+                            bmoState = BmoState.LISTENING,
+                            faceState = BmoState.LISTENING,
+                            statusDetail = "Microfone retomado após reconexão.",
+                        )
+                    }
+                    addLog("INFO", "Microfone preservado e reanunciado ao servidor.")
+                }
+            } else {
+                startListening()
+            }
         }
     }
 
@@ -1323,35 +1632,62 @@ class BmoEngine private constructor(context: Context) {
     }
 
     private fun handleServerAudio(bytes: ByteArray) {
-        if (!audioStarted) return
+        if (!audioStarted || audioStreamEnded) return
         player.write(bytes)
-        if (!_ui.value.streamingText && currentAssistantId.isNotEmpty()) {
-            // mantém o texto final; nada a fazer
-        }
         _ui.update {
-            if (it.bmoState != BmoState.SPEAKING) {
-                it.copy(bmoState = BmoState.SPEAKING, faceState = BmoState.SPEAKING)
+            if (it.bmoState != BmoState.SPEAKING || !it.audioPlaying) {
+                it.copy(
+                    bmoState = BmoState.SPEAKING,
+                    faceState = BmoState.SPEAKING,
+                    audioPlaying = true,
+                )
             } else {
                 it
             }
         }
-        if (playbackJob?.isActive != true) {
-            sendJson(JSONObject().put("type", "playback.started"))
-            playbackJob = scope.launch {
-                val finished = player.waitForPlayback()
-                if (finished) {
+    }
+
+    /**
+     * Um único job por stream: só considera concluído depois de `audio.end` e
+     * de o AudioTrack esvaziar a fila. O `finally` sempre libera o microfone e
+     * encerra o AudioTrack, evitando o estado "falando" preso.
+     */
+    private fun startPlaybackJob(streamId: Int) {
+        sendJson(JSONObject().put("type", "playback.started"))
+        playbackJob = scope.launch {
+            try {
+                val finished = player.waitForPlayback(
+                    timeoutMs = (currentDurationMs + 15_000L).coerceAtLeast(15_000L),
+                ) {
+                    streamId == audioStreamId && audioStreamEnded
+                }
+                if (!finished) {
+                    addLog("AVISO", "A reprodução excedeu o tempo limite.")
+                }
+                if (streamId != audioStreamId) return@launch
+                if (!playbackDoneSent) {
+                    playbackDoneSent = true
                     sendJson(JSONObject().put("type", "playback.done"))
-                    delay(250)
-                    audioStarted = false
+                }
+                delay(120)
+                setAudioMuted(false)
+                _ui.update {
+                    it.copy(
+                        bmoState = if (it.listening) BmoState.LISTENING else BmoState.IDLE,
+                        faceState = if (it.listening) BmoState.LISTENING else BmoState.IDLE,
+                        audioPlaying = false,
+                        statusDetail = "Pronto para ouvir.",
+                        // O sono conta a partir do fim real do áudio, não do
+                        // momento em que o servidor terminou de enviá-lo.
+                        lastActivityAtMs = SystemClock.elapsedRealtime(),
+                    )
+                }
+                addLog("INFO", "Reprodução concluída; microfone liberado.")
+            } finally {
+                if (streamId == audioStreamId) {
+                    player.stop()
+                    resetStreamState()
                     setAudioMuted(false)
-                    _ui.update {
-                        it.copy(
-                            bmoState = if (it.listening) BmoState.LISTENING else BmoState.IDLE,
-                            faceState = if (it.listening) BmoState.LISTENING else BmoState.IDLE,
-                            statusDetail = "Pronto para ouvir.",
-                        )
-                    }
-                    addLog("INFO", "Reprodução concluída.")
                 }
             }
         }

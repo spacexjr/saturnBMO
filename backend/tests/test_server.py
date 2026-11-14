@@ -1,4 +1,5 @@
 import copy
+import json
 import math
 import struct
 import time
@@ -296,6 +297,215 @@ def test_websocket_rejects_bad_token(tmp_path):
             error = ws.receive_json()
             assert error["type"] == "error"
             assert error["code"] == "unauthorized"
+
+
+def _receive_until(ws, predicate, limit=400):
+    """Lê texto/binário do WebSocket até `predicate(event)` ser verdadeiro."""
+    events = []
+    got_audio = False
+    for _ in range(limit):
+        message = ws.receive()
+        if message.get("text"):
+            event = json.loads(message["text"])
+            events.append(event)
+            if predicate(event):
+                break
+        elif message.get("bytes"):
+            got_audio = True
+    return events, got_audio
+
+
+def test_ten_consecutive_questions_return_to_standby(tmp_path):
+    app, _, _ = make_app(tmp_path)
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/ws", headers={"Authorization": f"Bearer {TOKEN}"}
+        ) as ws:
+            ws.receive_json()  # hello
+            ws.receive_json()  # state idle
+            for index in range(10):
+                ws.send_json({"type": "text", "text": f"Pergunta número {index}"})
+                events, got_audio = _receive_until(
+                    ws, lambda event: event["type"] == "audio.end"
+                )
+                kinds = [event["type"] for event in events]
+                assert "assistant.text.done" in kinds, kinds
+                assert "audio.start" in kinds, kinds
+                assert got_audio, f"rodada {index} sem áudio"
+                assert "audio.unavailable" not in kinds
+                assert "error" not in kinds
+
+                ws.send_json({"type": "playback.done"})
+                after, _ = _receive_until(
+                    ws,
+                    lambda event: event["type"] == "state"
+                    and event["state"] in {"listening", "idle"},
+                )
+                assert after, f"rodada {index} não voltou ao repouso"
+
+
+class FaceAgent:
+    def __init__(self):
+        self.calls = []
+
+    def reset(self):
+        self.calls.clear()
+
+    async def run(self, text, emit):
+        self.calls.append(text)
+        await emit(
+            "face",
+            expression="feliz",
+            label="Feliz",
+            tool="change_face",
+            hold_ms=8000,
+        )
+        return AgentResult(text="Fico feliz com isso!")
+
+
+def make_face_app(tmp_path):
+    cfg = make_config(tmp_path)
+    cfg["tools"]["enabled"] = True
+    services = Services(
+        cfg,
+        stt=FakeStt(),
+        tts=FakeTts(),
+        weather=FakeWeather(),
+        brain_factory=lambda: FakeBrain(),
+        registry=FakeRegistry(),
+        agent_factory=FaceAgent,
+    )
+    app = create_app(cfg, services=services)
+    return app, services
+
+
+def test_face_event_is_forwarded_and_restored_after_playback(tmp_path):
+    app, _ = make_face_app(tmp_path)
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/ws", headers={"Authorization": f"Bearer {TOKEN}"}
+        ) as ws:
+            ws.receive_json()  # hello
+            ws.receive_json()  # state idle
+            ws.send_json({"type": "text", "text": "Estou muito feliz hoje"})
+            events, _ = _receive_until(ws, lambda event: event["type"] == "audio.end")
+            face = next(event for event in events if event["type"] == "face")
+            assert face["expression"] == "happy"
+            assert face["label"] == "Feliz"
+            assert face["tool"] == "change_face"
+            assert face["hold_ms"] == 8000
+
+            ws.send_json({"type": "playback.done"})
+            after, _ = _receive_until(
+                ws, lambda event: event["type"] == "face.restore"
+            )
+            restore = after[-1]
+            assert restore["type"] == "face.restore"
+            assert restore["expression"] == "happy"
+            assert restore["reason"] == "playback_done"
+
+
+class PlainAgent:
+    """Agente que só responde texto: nunca chama ``change_face``."""
+
+    def __init__(self):
+        self.calls = []
+
+    def reset(self):
+        self.calls.clear()
+
+    async def run(self, text, emit):
+        self.calls.append(text)
+        return AgentResult(text="Pronto, já mudei a cara!")
+
+
+def make_plain_agent_app(tmp_path):
+    cfg = make_config(tmp_path)
+    cfg["tools"]["enabled"] = True
+    services = Services(
+        cfg,
+        stt=FakeStt(),
+        tts=FakeTts(),
+        weather=FakeWeather(),
+        brain_factory=lambda: FakeBrain(),
+        registry=FakeRegistry(),
+        agent_factory=PlainAgent,
+    )
+    return create_app(cfg, services=services)
+
+
+def test_direct_face_request_applies_without_tool_call(tmp_path):
+    """Pedido explícito de rosto não pode depender do LLM chamar a ferramenta."""
+    app = make_plain_agent_app(tmp_path)
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/ws", headers={"Authorization": f"Bearer {TOKEN}"}
+        ) as ws:
+            ws.receive_json()  # hello
+            ws.receive_json()  # state idle
+            ws.send_json({"type": "text", "text": "Ei, BMO, mude sua cara para feliz"})
+            events, _ = _receive_until(ws, lambda event: event["type"] == "audio.end")
+            faces = [event for event in events if event["type"] == "face"]
+            assert len(faces) == 1, [event["type"] for event in events]
+            assert faces[0]["expression"] == "happy"
+            assert faces[0]["label"] == "Feliz"
+            assert faces[0]["tool"] == "change_face"
+            texts = [event for event in events if event["type"] == "assistant.text.done"]
+            assert texts and texts[-1]["text"] == "Pronto, já mudei a cara!"
+
+            ws.send_json({"type": "playback.done"})
+            after, _ = _receive_until(
+                ws, lambda event: event["type"] == "face.restore"
+            )
+            restore = after[-1]
+            assert restore["expression"] == "happy"
+            assert restore["reason"] == "playback_done"
+
+
+class WrongFaceAgent:
+    """Agente que sempre pede uma expressão diferente da solicitada."""
+
+    def __init__(self):
+        self.calls = []
+
+    def reset(self):
+        self.calls.clear()
+
+    async def run(self, text, emit):
+        self.calls.append(text)
+        await emit("face", expression="sad", label="Triste", tool="change_face", hold_ms=8000)
+        return AgentResult(text="Ok!")
+
+
+def make_wrong_face_app(tmp_path):
+    cfg = make_config(tmp_path)
+    cfg["tools"]["enabled"] = True
+    services = Services(
+        cfg,
+        stt=FakeStt(),
+        tts=FakeTts(),
+        weather=FakeWeather(),
+        brain_factory=lambda: FakeBrain(),
+        registry=FakeRegistry(),
+        agent_factory=WrongFaceAgent,
+    )
+    return create_app(cfg, services=services)
+
+
+def test_explicit_face_request_beats_model_choice(tmp_path):
+    """Se o usuário pede "feliz", o modelo não pode trocar para outra cara."""
+    app = make_wrong_face_app(tmp_path)
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/ws", headers={"Authorization": f"Bearer {TOKEN}"}
+        ) as ws:
+            ws.receive_json()  # hello
+            ws.receive_json()  # state idle
+            ws.send_json({"type": "text", "text": "Ei, BMO, fique feliz"})
+            events, _ = _receive_until(ws, lambda event: event["type"] == "audio.end")
+            faces = [event for event in events if event["type"] == "face"]
+            assert [event["expression"] for event in faces] == ["happy"]
+            assert faces[0]["label"] == "Feliz"
 
 
 def test_websocket_audio_vad_wakeword_and_response(tmp_path):

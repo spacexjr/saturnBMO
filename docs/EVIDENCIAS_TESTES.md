@@ -1,6 +1,208 @@
 # Evidências de teste
 
-Registro do que foi realmente executado. As seções históricas abaixo são de **2026-10-28**; a atualização de **2026-11-08** cobre Faster-Whisper e ferramentas; a de **2026-11-10** cobre a integração musical; a de **2026-11-11** cobre execução real de ferramentas, recuperação de chamadas e o pipeline de voz.
+Registro do que foi realmente executado. As seções históricas abaixo são de **2026-10-28**; a atualização de **2026-11-08** cobre Faster-Whisper e ferramentas; a de **2026-11-10** cobre a integração musical; a de **2026-11-11** cobre execução real de ferramentas, recuperação de chamadas e o pipeline de voz; a de **2026-11-14** cobre escuta contínua, `change_face`, sono, microfone automático e equalizador.
+
+## Atualização 2026-11-14 — escuta contínua e face pelo modelo
+
+### Testes automatizados executados
+
+```text
+backend: 140 passed in 4.54s
+android: 33 passed em testDebugUnitTest (JDK 21, BUILD SUCCESSFUL)
+```
+
+Comandos reais:
+
+```bash
+cd backend && .venv/bin/python -m pytest -q
+cd android-app && JAVA_HOME=/home/renatto/.local/jdks/jdk-21.0.12.1+1 \
+  ./gradlew testDebugUnitTest --console=plain
+```
+
+Cobertura nova:
+
+- `test_ten_consecutive_questions_return_to_standby`: 10 perguntas consecutivas no
+  mesmo WebSocket; cada uma recebe `audio.start`, PCM, `audio.end` e volta ao
+  repouso depois de `playback.done`.
+- `test_change_face_is_always_offered_and_normalizes_aliases`: schema sempre
+  presente, apelido `feliz` → `happy`, valor inválido rejeitado.
+- `test_change_face_emits_real_face_event_without_activity`: a tool executa e o
+  agente emite `face` com `expression`, `label`, `tool` e `hold_ms`.
+- `test_face_event_is_forwarded_and_restored_after_playback`: o servidor envia
+  `face` e depois `face.restore` com `reason=playback_done`.
+- Android: prioridade da expressão do modelo sobre o estado automático, erro
+  ainda vencendo, limpeza do override e normalização de códigos/apelidos.
+  Distribuição: 3 `AppSettingsTest`, 9 `BmoActivityFaceTest`, 9
+  `BmoFaceClassifierTest`, 12 `BmoFaceSleepTest`.
+- `test_detect_face_intent_accepts_direct_requests` (11 casos) e
+  `test_detect_face_intent_ignores_conversation` (8 casos): reconhece pedidos
+  explícitos mesmo com o nome errado (“Ei, Mopidy…”, “Tumul…”) e não reage a
+  frases como “estou muito feliz hoje”.
+- `test_direct_face_request_applies_without_tool_call`: com um agente que nunca
+  chama `change_face`, o pedido “mude sua cara para feliz” ainda produz um único
+  evento `face` e `face.restore` em `playback_done`.
+- `test_explicit_face_request_beats_model_choice`: se o modelo tentar outra
+  expressão no mesmo turno, o pedido do usuário prevalece.
+
+### O que estes testes provam e o que não provam
+
+Provam o protocolo e a lógica de estado: o ciclo pergunta → resposta → áudio →
+`playback.done` → repouso funciona repetidamente no backend, e a tool de face
+produz eventos reais. **Não** substituem um teste em aparelho Android físico com
+microfone e alto-falante reais; essa validação de campo continua pendente.
+
+### Diagnóstico do “não mudou nada” (2026-11-14 13:35)
+
+O código e os testes estavam atualizados, mas o comportamento no aparelho não
+mudava porque **o APK instalado no celular era de 2026-11-13 18:59**, anterior a
+todas as correções, e o backend havia parado de responder na porta `8765`.
+
+Evidências coletadas:
+
+```text
+$ stat -c '%y %n' android-app/app/build/outputs/apk/debug/app-debug.apk
+2026-11-13 18:59  (antes da correção)
+2026-11-14 13:33  (depois de recompilar)
+$ ss -ltnp | grep 8765      # antes: nada escutando
+$ adb devices               # nenhum aparelho conectado
+```
+
+Durante esse mesmo período, o backend em execução registrava o ciclo completo,
+o que confirma que o problema estava no app instalado e não no servidor:
+
+```text
+Sessão fd05eb6bdd86: microfone ativo (16000 Hz).
+Sessão fd05eb6bdd86: wake word acústica detectada (score=0.837).
+Sessão fd05eb6bdd86: transcrição concluída (10280 ms).
+Sessão fd05eb6bdd86: pergunta recebida (9 caracteres).
+Sessão fd05eb6bdd86: enviando áudio TTS (4896 ms, 22050 Hz).
+Sessão fd05eb6bdd86: reprodução iniciada no app.
+Sessão fd05eb6bdd86: reprodução concluída; voltando a aguardar.
+```
+
+Depois de religar o backend, o teste real por WebSocket com Ollama confirmou a
+tool de face de ponta a ponta:
+
+```text
+face {'expression': 'happy', 'label': 'Feliz', 'tool': 'change_face'}
+assistant.text.done {'text': 'Ei! Fico feliz de poder mudar a cara...'}
+eventos: transcript, state, activity, face, assistant.text.delta, activity,
+         assistant.text.done, state, audio.start, audio.end
+Face atualizada pelo modelo: happy
+Face restaurada (playback_done): happy
+```
+
+Ferramentas de verificação adicionadas:
+
+- `scripts/install_android.sh`: compila, instala via `adb install -r` e mostra
+  `versionCode`, `versionName` e `lastUpdateTime` lidos do aparelho.
+- **Ajustes → Sobre o aplicativo**: mostra versão, tipo de build e a data de
+  instalação do APK, para detectar APK velho sem precisar do PC.
+
+Pendente: instalar o APK novo em um aparelho conectado e repetir o teste de voz
+(duas perguntas seguidas + “mude sua cara para feliz”).
+
+### Pedido de rosto resistente a erro de STT (execução real)
+
+O teste E2E passou a enviar `playback.done` e a imprimir eventos `face`, então o
+ciclo completo é verificado de verdade. Execução real em 2026-11-14:
+
+```text
+$ backend/.venv/bin/python scripts/e2e_ws.py --activate \
+    --text "Ei, BMO, mude sua cara para triste"
+[teste] Transcrição: 'Ei, Dumoul, mude sua cara para triste.'
+[teste] Rosto aplicado: sad (Triste) via change_face
+[teste] Resposta: 'Ah, que triste! Vou ficar assim por um tempo...'
+[teste] Evento: audio.start 22050 Hz
+[teste] Simulando fim da reprodução (playback.done).
+[teste] Rosto restaurado: sad motivo playback_done
+[teste] Evento: state idle
+[teste] RESULTADO: OK
+```
+
+O STT trocou “Ei, BMO” por “Ei, Dumoul” e, mesmo assim, o rosto foi aplicado,
+porque o pedido é detectado no texto antes do LLM. Três turnos seguidos no mesmo
+WebSocket, com espera pelo repouso entre eles:
+
+```text
+hello hello c4d9baebeb02 estado idle
+turno 1: texto='Ei, BMO, mude sua cara para animado' faces=['excited'] audio_chunks=37 restore=playback_done standby=idle
+turno 2: texto='Ei, BMO, mude sua cara para sonolento' faces=['sleepy'] audio_chunks=19 restore=playback_done standby=idle
+turno 3: texto='Ei, BMO, quanto é dois mais dois?' faces=[] audio_chunks=20 restore=None standby=idle
+```
+
+O log do backend mostra a precedência do pedido do usuário sobre o modelo:
+
+```text
+Sessão c4d9baebeb02: pedido explícito de face (excited).
+Face atualizada pelo modelo: excited
+Tool call recebido: change_face {'expression': 'happy'}
+Ferramenta executada: change_face -> ok
+Face do modelo (happy) ignorada: o pedido do usuário (excited) prevalece.
+Face restaurada (playback_done): excited
+```
+
+### Rosto humano, sono e música (2026-11-14, tarde)
+
+Comportamento implementado no app e verificado por 12 testes novos em
+`BmoFaceSleepTest`:
+
+- dorme com `sleeping_01/02` (olhos fechados) + Zzz após 10 s sem eventos,
+  fala, música ou operação;
+- não dorme durante fala, pensamento, áudio, música tocando, confirmação
+  pendente, `change_face` ativo ou teste de microfone;
+- erro nunca é escondido pelo sono;
+- microfone aguardando wake word (`state: listening` sem VAD) mostra rosto
+  calmo, não a animação de escuta;
+- a boca (`speaking_01..04`, 130 ms) só anima com `audioPlaying = true`;
+- emoção do texto (`feliz`, `adorei`, `triste`, `surpresa`) vira camada sobre a
+  fala, mantendo os frames de boca;
+- música tocando fixa o tema `EQUALIZER` com título/artista e impede o sono.
+
+```text
+$ cd android-app && ./gradlew testDebugUnitTest --console=plain
+33 testes, 0 falhas — BUILD SUCCESSFUL
+```
+
+### Correções de campo: sono com mic ativo, equalizador e mic automático (2026-11-14, 15h)
+
+Três sintomas relatados foram reproduzidos e corrigidos:
+
+1. **Não dormia com o microfone ativo** — o app carimbava “atividade” em
+   qualquer evento, inclusive `vad`, `pong`, transcrição vazia,
+   `wakeword.not_detected` e `state: listening`; e o backend não enviava
+   `vad speaking=false` quando um ruído curto terminava sem utterance, deixando
+   o indicador de fala preso. Agora só eventos de conversa/operação/música
+   contam, o backend sempre fecha o VAD e o sono não depende de `vadSpeaking`.
+2. **Equalizador não aparecia** — a consulta usava só o Mopidy; se ele estivesse
+   parado, escondia a música tocando no navegador/MPRIS. O app passou a
+   consultar `/api/music/state` e `/api/v1/media` e escolhe o player que está
+   tocando. Mopidy parado com título antigo não mantém a face de música.
+3. **Microfone não ativava sozinho** — após o `hello`, o app só ouvia se o
+   usuário tocasse em **Ouvir**. Agora a permissão é pedida uma vez e
+   `requestListening()` sobe o microfone automaticamente ao conectar.
+
+Evidências no aparelho (`192.168.3.242`, APK `lastUpdateTime=2026-11-14
+15:20:14`), com `adb logcat -s BmoEngine:* BmoFace:*`:
+
+```text
+15:14:51  Microfone ativo (16 kHz, mono, PCM 16 bits).   <- sem toque
+15:15:01  BmoFace: Dormindo após 10 s sem atividade.
+15:15:05  Palavra de ativação detectada.                 <- wake word real
+15:15:05  BmoFace: Acordando: atividade detectada.
+15:15:43  [STT] (vazio)                                  <- ruído NÃO acordou
+15:15:58  BmoFace: Dormindo após 10 s sem atividade.
+```
+
+O equalizador foi confirmado por captura de tela com `Jesus Chorou —
+Racionais Mc's`, rótulo `TOCANDO` e barras reagindo; ao parar a faixa, o log
+mostrou `Música pausada ou parada` às `15:20:59.781` e `Dormindo após 10 s sem
+atividade` às `15:21:09.900` — o sono conta a partir do fim da música.
+
+Estabilidade do STT: o backend chegou a ficar com 8 threads a ~99% CPU e
+`/health` expirava. O Faster-Whisper agora usa `cpu_threads=4`, uma única thread
+de inferência e recusa áudio novo enquanto a anterior não termina; o modelo
+`medium` voltou a responder com a máquina em ~40% de CPU durante a transcrição.
 
 ## Atualização 2026-11-11 — ferramentas reais e pipeline de voz
 

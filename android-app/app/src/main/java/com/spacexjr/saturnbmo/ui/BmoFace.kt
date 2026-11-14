@@ -1,6 +1,7 @@
 package com.spacexjr.saturnbmo.ui
 
 import android.graphics.BitmapFactory
+import android.util.Log
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
@@ -73,7 +75,8 @@ object FaceController {
         "thinking", "processing" -> 480
         "speaking" -> 130
         "listening" -> 380
-        "sleepy", "sleeping" -> 900
+        "sleepy" -> 900
+        "sleeping" -> 1700
         "happy" -> 420
         "excited" -> 300
         "love" -> 520
@@ -102,21 +105,67 @@ fun BmoFace(
     fullBleed: Boolean = false,
 ) {
     val context = LocalContext.current
+    var sleeping by remember { mutableStateOf(false) }
+    // O laço do sono lê o estado mais recente sem reiniciar a cada mudança de
+    // `state` (ruído não deve acordar o rosto, mas THINKING/SPEAKING reais
+    // precisam bloquear o sono).
+    val latestUi by rememberUpdatedState(ui)
+
+    // Dorme depois de 10 s sem nenhuma atividade; qualquer evento do servidor,
+    // música ou operação reinicia a contagem e acorda o BMO.
+    LaunchedEffect(
+        ui.lastActivityAtMs,
+        ui.music?.isPlaying,
+        ui.musicActive,
+        ui.activity,
+        ui.pendingConfirmation,
+        ui.faceExpression,
+        ui.audioPlaying,
+        ui.streamingText,
+        ui.micTesting,
+        ui.connection,
+    ) {
+        if (sleeping) Log.i(FACE_TAG, "Acordando: atividade detectada.")
+        sleeping = false
+        if (ui.connection == com.spacexjr.saturnbmo.ConnectionState.DISCONNECTED) return@LaunchedEffect
+        while (true) {
+            delay(500L)
+            if (BmoFaceController.shouldSleep(latestUi, android.os.SystemClock.elapsedRealtime())) {
+                sleeping = true
+                Log.i(FACE_TAG, "Dormindo após 10 s sem atividade.")
+                break
+            }
+        }
+    }
+
     val derived = remember(
         ui.transcript,
         ui.assistantText,
         ui.faceState,
+        ui.faceExpression,
         ui.music,
         ui.activity,
+        ui.vadSpeaking,
+        sleeping,
     ) {
-        BmoFaceController.visualFor(ui)
+        BmoFaceController.visualFor(ui, sleeping)
     }
     var visual by remember { mutableStateOf(derived) }
 
-    LaunchedEffect(ui.transcript, ui.assistantText, ui.faceState, ui.music, ui.activity) {
+    LaunchedEffect(
+        ui.transcript,
+        ui.assistantText,
+        ui.faceState,
+        ui.faceExpression,
+        ui.music,
+        ui.activity,
+        ui.vadSpeaking,
+        sleeping,
+    ) {
         visual = derived
+        if (sleeping) return@LaunchedEffect
         when (ui.faceState) {
-            BmoState.THINKING, BmoState.SPEAKING -> Unit
+            BmoState.THINKING, BmoState.SPEAKING, BmoState.LISTENING, BmoState.ERROR -> Unit
             BmoState.IDLE -> if (derived.theme != BmoFaceTheme.NONE && !ui.musicActive) {
                 delay(THEME_IDLE_LINGER_MS)
                 visual = neutralVisual(ui.faceState, derived.activity)
@@ -125,7 +174,7 @@ fun BmoFace(
         }
     }
 
-    val expressionKey = BmoFaceController.expressionKeyFor(ui, visual)
+    val expressionKey = BmoFaceController.expressionKeyFor(ui, visual, sleeping)
     val paths = remember(expressionKey) { FaceController.framesFor(expressionKey) }
     val frames: List<ImageBitmap> = remember(paths) {
         paths.mapNotNull { path ->
@@ -158,7 +207,11 @@ fun BmoFace(
     var blink by remember { mutableStateOf(false) }
     LaunchedEffect(expressionKey, resumed) {
         blink = false
-        if (!resumed || expressionKey != "idle") return@LaunchedEffect
+        // Pisca em quase todos os rostos (menos dormindo, erro e aquecimento),
+        // para o BMO parecer vivo e não um PNG congelado.
+        if (!resumed || expressionKey in setOf("sleeping", "error", "warmup")) {
+            return@LaunchedEffect
+        }
         val random = kotlin.random.Random(84)
         while (true) {
             delay(random.nextLong(2600L, 6200L))
@@ -196,6 +249,7 @@ fun BmoFace(
 }
 
 private const val THEME_IDLE_LINGER_MS = 4_000L
+private const val FACE_TAG = "BmoFace"
 
 private fun neutralVisual(
     state: BmoState,

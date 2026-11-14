@@ -35,6 +35,7 @@ from .audio import EnergyVad, pcm16_to_wav
 from .config import DATA_DIR, load_config, public_config, resolve_runtime_paths
 from .discovery import start_discovery
 from .files import Workspace, WorkspaceError
+from .faces import detect_face_intent, face_label, normalize_face_expression
 from .folder_picker import FolderPicker, FolderPickerError
 from .llm import LlmError, LlmUnavailable, OllamaBrain, sanitize_reply
 from .media import MediaError, MediaService
@@ -638,6 +639,10 @@ class BmoSession:
         self._brain = services.brain_factory()
         self._agent = services.make_agent()
         self.pending_confirmation: PendingConfirmation | None = None
+        self.face_expression: str | None = None
+        # Expressão pedida explicitamente pelo usuário no turno atual: ela
+        # prevalece sobre a escolha do modelo até o rosto ser restaurado.
+        self.face_lock: str | None = None
         audio_cfg = self.config["audio"]
         self.vad = EnergyVad(
             sample_rate=int(audio_cfg["sample_rate"]),
@@ -665,7 +670,43 @@ class BmoSession:
         return {"type": event_type, "seq": self.seq, "ts": now_ms(), **fields}
 
     async def event(self, event_type: str, **fields: Any) -> None:
+        if event_type == "face":
+            expression = normalize_face_expression(fields.get("expression"))
+            if expression is None:
+                log.warning("Expressão facial inválida ignorada: %r", fields.get("expression"))
+                return
+            fields["expression"] = expression
+            fields["label"] = str(fields.get("label") or face_label(expression))
+            if expression == self.face_expression:
+                # Pedido local já aplicado (ou o modelo repetiu a mesma cara):
+                # evita dois eventos iguais para o mesmo rosto.
+                log.info("Face %s já ativa; evento repetido ignorado.", expression)
+                return
+            if self.face_lock is not None and expression != self.face_lock:
+                log.info(
+                    "Face do modelo (%s) ignorada: o pedido do usuário (%s) prevalece.",
+                    expression,
+                    self.face_lock,
+                )
+                return
+            self.face_expression = expression
+            log.info("Face atualizada pelo modelo: %s", expression)
         await self.send(self._event(event_type, **fields))
+
+    async def restore_face(self, reason: str = "response_done", grace_ms: int = 1800) -> None:
+        """Devolve o rosto ao estado automático sem deixar a expressão presa."""
+        expression = self.face_expression
+        if expression is None:
+            return
+        self.face_expression = None
+        self.face_lock = None
+        log.info("Face restaurada (%s): %s", reason, expression)
+        await self.event(
+            "face.restore",
+            expression=expression,
+            reason=reason,
+            grace_ms=max(0, int(grace_ms)),
+        )
 
     async def set_state(self, state: str, detail: str = "") -> None:
         self.state = state
@@ -797,12 +838,18 @@ class BmoSession:
             self.capture_active = True
             self.vad.reset()
             self._reset_acoustic()
+            log.info(
+                "Sessão %s: microfone ativo (%s Hz).",
+                self.session_id,
+                audio_cfg["sample_rate"],
+            )
             await self.event("audio.ready", **audio_cfg)
             if self.state not in {"thinking", "speaking"}:
                 await self.set_state(self.resting_state(), "Microfone ativo. Diga 'Ei, BMO'.")
         elif msg_type == "audio.end":
             self.capture_active = False
             self._reset_acoustic()
+            log.info("Sessão %s: microfone pausado pelo cliente.", self.session_id)
             events = self.vad.flush()
             await self._process_vad_events(events)
             if self.state not in {"thinking", "speaking"}:
@@ -834,14 +881,17 @@ class BmoSession:
         elif msg_type == "interrupt":
             await self.interrupt(reason="user")
         elif msg_type == "playback.started":
+            log.info("Sessão %s: reprodução iniciada no app.", self.session_id)
             await self.set_state("speaking", "Reproduzindo áudio.")
         elif msg_type == "playback.done":
             self._cancel_idle_timer()
-            self._ignore_audio_until = time.monotonic() + 0.4
+            self._ignore_audio_until = time.monotonic() + 0.6
             self.vad.reset()
             self._reset_acoustic()
+            await self.restore_face("playback_done")
             if self.state in {"speaking", "thinking", "error"}:
                 await self.set_state(self.resting_state(), "Pronto para ouvir.")
+            log.info("Sessão %s: reprodução concluída; voltando a aguardar.", self.session_id)
         elif msg_type == "reset":
             if hasattr(self._brain, "reset"):
                 self._brain.reset()
@@ -890,6 +940,11 @@ class BmoSession:
         if self.bypass_wake_once:
             return
         self.bypass_wake_once = True
+        log.info(
+            "Sessão %s: wake word acústica detectada (score=%.3f).",
+            self.session_id,
+            float(getattr(detection, "score", 0.0)),
+        )
         await self.event(
             "wakeword.detected",
             source="acoustic",
@@ -903,8 +958,13 @@ class BmoSession:
         for event in events:
             if event.kind == "speech_start":
                 await self.event("vad", speaking=True)
-            elif event.kind == "speech_end" and event.utterance:
+            elif event.kind == "speech_end":
+                # Sempre fecha o indicador de fala. Antes, um ruído curto
+                # (speech_end sem utterance) deixava `speaking=True` para
+                # sempre no app, e o rosto nunca dormia.
                 await self.event("vad", speaking=False)
+                if not event.utterance:
+                    continue
                 if self._utterance_task and not self._utterance_task.done():
                     continue
                 self._utterance_task = asyncio.create_task(self.handle_utterance(event.utterance))
@@ -936,6 +996,11 @@ class BmoSession:
         text = result.text.strip()
         await self.event("transcript", text=text, final=True, source="audio",
                          duration_ms=result.duration_ms)
+        log.info(
+            "Sessão %s: transcrição concluída (%d ms).",
+            self.session_id,
+            int(result.duration_ms),
+        )
         if not text:
             await self.event("wakeword.not_detected", reason="empty",
                              message="Não entendi. Diga 'Ei, BMO' e sua pergunta.")
@@ -991,6 +1056,7 @@ class BmoSession:
             # remova-a para o LLM receber apenas a pergunta.
             text = match.remaining_text
         self.bypass_wake_once = False
+        log.info("Sessão %s: pergunta recebida (%d caracteres).", self.session_id, len(text))
         await self.event("request.accepted", text=text)
         await self.start_response(text)
 
@@ -1005,7 +1071,22 @@ class BmoSession:
         self.generation += 1
         gen = self.generation
         assistant_id = uuid.uuid4().hex[:12]
+        await self.restore_face("new_request", grace_ms=0)
+        requested_face = detect_face_intent(user_text)
+        if requested_face is not None:
+            # Pedido direto ("mude sua cara para feliz"): aplica antes do LLM,
+            # porque o modelo pequeno às vezes não chama a ferramenta.
+            log.info("Sessão %s: pedido explícito de face (%s).", self.session_id, requested_face)
+            self.face_lock = requested_face
+            await self.event(
+                "face",
+                expression=requested_face,
+                label=face_label(requested_face),
+                tool="change_face",
+                hold_ms=8000,
+            )
         await self.set_state("thinking", "Pensando...")
+        log.info("Sessão %s: modelo processando.", self.session_id)
         await self.event("activity", activity="processing", status="start", label="Pensando")
         try:
             if self.pending_confirmation is not None:
@@ -1059,6 +1140,8 @@ class BmoSession:
                     )
                     if self.services.tts.available():
                         await self.speak(answer, assistant_id, gen)
+                    else:
+                        await self.restore_face("pending_no_tts")
                     return
             else:
                 pieces: list[str] = []
@@ -1103,6 +1186,7 @@ class BmoSession:
                     reason="tts_unavailable",
                     message="O TTS local não está disponível. A resposta foi mostrada em texto.",
                 )
+                await self.restore_face("no_tts")
                 await self.set_state(self.resting_state(), "Resposta exibida sem áudio.")
         except asyncio.CancelledError:
             raise
@@ -1184,6 +1268,7 @@ class BmoSession:
         if self.services.tts.available():
             await self.speak(answer, assistant_id, gen)
         else:
+            await self.restore_face("confirmation_no_tts")
             await self.set_state(self.resting_state(), "Resposta exibida sem áudio.")
         return True
 
@@ -1203,6 +1288,12 @@ class BmoSession:
             return
         audio_id = uuid.uuid4().hex[:12]
         await self.set_state("speaking", "Falando...")
+        log.info(
+            "Sessão %s: enviando áudio TTS (%.0f ms, %s Hz).",
+            self.session_id,
+            audio.duration_s * 1000,
+            audio.sample_rate,
+        )
         await self.event(
             "audio.start",
             id=audio_id,
@@ -1222,11 +1313,16 @@ class BmoSession:
                 # Envia um pouco mais rápido que o tempo real, mantendo a fila curta.
                 await asyncio.sleep(0.02)
             await self.event("audio.end", id=audio_id)
+            log.info("Sessão %s: áudio TTS enviado; aguardando fim da reprodução.", self.session_id)
             self._schedule_idle_after_playback(audio.duration_s + 3.0)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
             log.warning("Falha ao enviar áudio: %s", exc)
+            # Sem `audio.end` o app ficaria eternamente no estado "falando".
+            await self.event("audio.stop", reason="send_error")
+            await self.restore_face("audio_send_error", grace_ms=0)
+            await self.set_state(self.resting_state(), "Falha ao enviar áudio.")
 
     def _schedule_idle_after_playback(self, seconds: float) -> None:
         self._cancel_idle_timer()
@@ -1237,6 +1333,7 @@ class BmoSession:
                 if self.state == "speaking":
                     self.vad.reset()
                     self._ignore_audio_until = time.monotonic() + 0.4
+                    await self.restore_face("idle_timeout", grace_ms=0)
                     await self.set_state(self.resting_state(), "Pronto para ouvir.")
             except asyncio.CancelledError:
                 pass
@@ -1260,6 +1357,7 @@ class BmoSession:
         self._reset_acoustic()
         self._ignore_audio_until = time.monotonic() + 0.4
         await self.event("audio.stop", reason=reason)
+        await self.restore_face("interrupt", grace_ms=0)
         await self.set_state(self.resting_state(), "Fala interrompida." if reason == "user" else "Pronto.")
 
     async def _recover_after_error(self) -> None:
@@ -1271,6 +1369,7 @@ class BmoSession:
                 await asyncio.sleep(2.5)
                 if self.state == "error":
                     self.vad.reset()
+                    await self.restore_face("error_recovery", grace_ms=0)
                     await self.set_state(self.resting_state(), "Pronto para tentar de novo.")
             except asyncio.CancelledError:
                 pass

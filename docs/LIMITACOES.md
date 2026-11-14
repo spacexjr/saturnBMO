@@ -40,9 +40,11 @@ O arquivo `assets/wakeword_hey_jarvis.onnx` é o modelo **“Hey Jarvis”** do 
 - As ferramentas são validadas pelo backend, mas o modelo ainda escolhe qual chamar e com quais argumentos.
 - O agente valida campos obrigatórios, tipos, `enum` e limites, aplica timeout por ferramenta e ignora chamadas duplicadas.
 - Se o modelo imprimir uma chamada de ferramenta como texto, o backend só a executa quando o nome existe no registro e os argumentos passam na validação. JSON inválido é descartado e nunca vira resposta falada.
+- `change_face` só aceita as 14 expressões existentes; o modelo pode escolher uma emoção inadequada ao contexto. O app mantém a expressão por alguns segundos e a restaura ao fim da resposta, em erro ou por timeout — ela não fica presa. Quando o usuário pede a expressão diretamente (“mude sua cara para feliz”), o pedido detectado no backend prevalece sobre a escolha do modelo.
+- O STT erra o nome “BMO” com frequência (por exemplo “Mopidy”, “Dumoul”), sobretudo em fala sintetizada e sem a wake word acústica. Por isso os comandos de rosto são detectados no texto, sem depender do nome.
 - Hora e data são resolvidas localmente antes do LLM.
 - Histórico é em memória, por sessão; não há persistência entre reinícios.
-- Modelos maiores podem ser lentos em CPU e consumir muita memória.
+- Modelos maiores podem ser lentos em CPU e consumir muita memória. `stt.cpu_threads` limita as threads do CTranslate2 (padrão 4); uma inferência em andamento bloqueia novos áudios em vez de enfileirá-los.
 - `think: false` reduz latência, mas não elimina erros de raciocínio.
 
 ## 4. Ferramentas e internet
@@ -146,6 +148,9 @@ O arquivo `assets/wakeword_hey_jarvis.onnx` é o modelo **“Hey Jarvis”** do 
 - Medição de latência ponta a ponta em Wi-Fi real (captura → wakeword → STT → LLM → ferramentas → TTS → alto-falante).
 - Teste prolongado de escuta com tela apagada e serviço em primeiro plano.
 - Teste de áudio com o celular dentro da carcaça do BMO (eco, vibração, volume).
+- O app silencia o microfone durante o TTS para não reconhecer a própria voz; não há cancelamento de eco acústico (AEC) dedicado, então alto-falante muito alto ainda pode vazar para o microfone.
+- O rosto é controlado por 14 expressões fixas; não há geração de novas animações nem sincronização labial por fonema. A boca usa 4 frames alternados apenas quando há áudio tocando, e as emoções são camadas procedurais sobre o PNG.
+- O sono é decidido no app: 10 s sem eventos relevantes, fala, música ou operação. Ruído de microfone (VAD, transcrição vazia) não reinicia a contagem, mas uma wake word acústica detectada por engano (falso positivo do modelo ONNX) ainda acorda o BMO; nesse caso o problema é o classificador de palavra de ativação, não o sono.
 - Teste em outros modelos de celular e versões do Android, especialmente Galaxy A22.
 - Teste de controle de janelas em Wayland e X11 com o ambiente KDE real.
 - Teste do seletor nativo de pastas em KDE/Wayland e com `zenity`.

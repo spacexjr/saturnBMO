@@ -10,7 +10,18 @@ import com.spacexjr.saturnbmo.BmoUiState
  * tema continuam rodando ao redor do rosto.
  */
 object BmoFaceController {
-    fun visualFor(ui: BmoUiState): BmoFaceVisual {
+    /** Tempo sem nenhuma atividade em que o BMO continua acordado. */
+    const val SLEEP_AFTER_MS = 10_000L
+
+    fun visualFor(ui: BmoUiState, sleeping: Boolean = false): BmoFaceVisual {
+        if (sleeping) {
+            // Dormindo: rosto calmo, olhos fechados e Zzz, sem tema nem operação.
+            return BmoFaceVisual(
+                data = BmoFaceData(),
+                emotion = BmoFaceEmotion.SLEEPING,
+                activity = BmoActivity.NONE,
+            )
+        }
         var data = BmoFaceClassifier.classify(
             userText = ui.transcript,
             assistantText = ui.assistantText,
@@ -32,11 +43,47 @@ object BmoFaceController {
             }
         }
         val activity = ui.activity?.activity ?: BmoActivity.NONE
+        val automaticEmotion = emotionFor(
+            theme = data.theme,
+            state = ui.faceState,
+            hint = data.emotionHint,
+            activity = activity,
+            vadSpeaking = ui.vadSpeaking,
+        )
         return BmoFaceVisual(
             data = data,
-            emotion = emotionFor(data.theme, ui.faceState, data.emotionHint, activity),
+            emotion = modelEmotionFor(ui) ?: automaticEmotion,
             activity = activity,
         )
+    }
+
+    /**
+     * O rosto deve dormir? Só depois de [SLEEP_AFTER_MS] sem nenhum evento do
+     * servidor e sem conversa, música ou operação em andamento.
+     */
+    fun shouldSleep(ui: BmoUiState, nowMs: Long): Boolean {
+        when (ui.faceState) {
+            BmoState.THINKING, BmoState.SPEAKING, BmoState.ERROR,
+            BmoState.DISCONNECTED, BmoState.CONNECTING -> return false
+            else -> Unit
+        }
+        if (ui.audioPlaying || ui.streamingText) return false
+        if (ui.music?.isPlaying == true) return false
+        if (ui.pendingConfirmation != null) return false
+        if (ui.micTesting) return false
+        if (ui.faceExpression != null) return false
+        if (ui.activity?.activity?.let { it != BmoActivity.NONE } == true) return false
+        if (ui.lastActivityAtMs <= 0L) return false
+        return nowMs - ui.lastActivityAtMs >= SLEEP_AFTER_MS
+    }
+
+    /**
+     * Emoção pedida explicitamente pelo modelo via `change_face`.
+     * O estado de erro continua vencendo para não esconder uma falha real.
+     */
+    fun modelEmotionFor(ui: BmoUiState): BmoFaceEmotion? {
+        if (ui.faceState == BmoState.ERROR) return BmoFaceEmotion.ERROR
+        return BmoFaceEmotion.fromCode(ui.faceExpression)
     }
 
     fun emotionFor(
@@ -44,10 +91,15 @@ object BmoFaceController {
         state: BmoState,
         hint: BmoFaceEmotion? = null,
         activity: BmoActivity = BmoActivity.NONE,
+        vadSpeaking: Boolean = false,
     ): BmoFaceEmotion = when (state) {
         BmoState.ERROR -> BmoFaceEmotion.ERROR
-        BmoState.SPEAKING -> BmoFaceEmotion.SPEAKING
-        BmoState.LISTENING -> BmoFaceEmotion.LISTENING
+        // Enquanto fala, a boca vem dos frames "speaking"; a emoção do texto
+        // (alegria, surpresa, tristeza) entra como camada por cima.
+        BmoState.SPEAKING -> hint ?: BmoFaceEmotion.SPEAKING
+        // O microfone fica sempre ativo esperando a wake word. O rosto só
+        // "ouve" de verdade quando o VAD detecta fala.
+        BmoState.LISTENING -> if (vadSpeaking) BmoFaceEmotion.LISTENING else hint ?: BmoFaceEmotion.NEUTRAL
         BmoState.THINKING ->
             if (theme == BmoFaceTheme.CALCULATING) BmoFaceEmotion.PROCESSING
             else BmoFaceEmotion.THINKING
@@ -86,16 +138,35 @@ object BmoFaceController {
     /**
      * Chave usada pelo FaceController para escolher os PNGs. Estados de voz
      * (ouvindo, falando, pensando, erro) mandam na expressão; no repouso,
-     * usamos a emoção sugerida pelo tema.
+     * usamos a emoção sugerida pelo tema. Uma expressão pedida pelo modelo
+     * tem prioridade sobre o estado automático, exceto em erro.
      */
-    fun expressionKeyFor(ui: BmoUiState, visual: BmoFaceVisual): String = when (ui.faceState) {
-        BmoState.CONNECTING -> "warmup"
-        BmoState.DISCONNECTED -> "idle"
-        BmoState.ERROR -> "error"
-        BmoState.SPEAKING -> "speaking"
-        BmoState.THINKING -> "thinking"
-        BmoState.LISTENING -> "listening"
-        BmoState.IDLE -> expressionKeyFor(visual.emotion)
+    fun expressionKeyFor(
+        ui: BmoUiState,
+        visual: BmoFaceVisual,
+        sleeping: Boolean = false,
+    ): String {
+        if (sleeping && ui.faceState != BmoState.ERROR) return "sleeping"
+        when (ui.faceState) {
+            BmoState.CONNECTING -> return "warmup"
+            BmoState.DISCONNECTED -> return "idle"
+            BmoState.ERROR -> return "error"
+            else -> Unit
+        }
+        BmoFaceEmotion.fromCode(ui.faceExpression)?.let { emotion ->
+            // Com áudio tocando a boca continua vindo dos frames "speaking";
+            // a expressão escolhida entra como camada de emoção.
+            if (ui.faceState == BmoState.SPEAKING && ui.audioPlaying) return@let
+            return expressionKeyFor(emotion)
+        }
+        return when (ui.faceState) {
+            // Boca só se mexe quando há som saindo do alto-falante.
+            BmoState.SPEAKING -> if (ui.audioPlaying) "speaking" else "thinking"
+            BmoState.THINKING -> "thinking"
+            BmoState.LISTENING -> if (ui.vadSpeaking) "listening" else "idle"
+            BmoState.IDLE -> expressionKeyFor(visual.emotion)
+            else -> "idle"
+        }
     }
 
     fun expressionKeyFor(emotion: BmoFaceEmotion): String = when (emotion) {
@@ -107,6 +178,7 @@ object BmoFaceController {
         BmoFaceEmotion.SURPRISED -> "surprised"
         BmoFaceEmotion.EXCITED -> "excited"
         BmoFaceEmotion.SLEEPY -> "sleepy"
+        BmoFaceEmotion.SLEEPING -> "sleeping"
         BmoFaceEmotion.LOVE -> "love"
         BmoFaceEmotion.ANGRY -> "angry"
         BmoFaceEmotion.LISTENING -> "listening"

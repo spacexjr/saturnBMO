@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .apps import AppManager
+from .faces import FACE_EXPRESSIONS, face_label, normalize_face_expression
 from .files import Workspace, WorkspaceError
 from .media import MediaError, MediaService
 from .music.manager import MusicError, MusicManager
@@ -134,6 +135,7 @@ _FILE_TOOLS = {
     "rename_file", "copy_file", "move_file", "delete_file", "delete_directory",
 }
 _SYSTEM_TOOLS = {"system_info"}
+_FACE_TOOLS = {"change_face"}
 _MUSIC_CORE = {
     "music_search", "music_play", "music_pause", "music_resume", "music_stop",
     "music_next", "music_previous", "music_set_volume", "music_get_volume",
@@ -187,7 +189,9 @@ def _schemas_for(self: "ToolRegistry", text: str) -> list[dict[str, Any]]:
     contra o registro completo.
     """
     plain = _plain(text)
-    selected: set[str] = set()
+    # A face é sempre oferecida: o modelo pode reagir emocionalmente a qualquer
+    # pergunta, inclusive uma conversa sem intenção de ferramenta.
+    selected: set[str] = set(_FACE_TOOLS)
     app_intent = any(word in plain for word in _APP_WORDS)
     web_intent = any(word in plain for word in _WEB_WORDS)
     file_intent = any(word in plain for word in _FILE_WORDS)
@@ -218,6 +222,10 @@ def _schemas_for(self: "ToolRegistry", text: str) -> list[dict[str, Any]]:
 
     if not selected:
         selected = set(_DEFAULT_TOOLS)
+    elif not (selected - _FACE_TOOLS):
+        # Sem intenção específica: conversa livre ainda pode abrir aplicativos,
+        # pesquisar e tocar música, além de mudar a face.
+        selected |= _DEFAULT_TOOLS
     # Sempre permite o que combina com o pedido, mesmo com sinônimos parciais.
     available = [name for name in self._specs if name in selected]
     return [self._specs[name].schema() for name in available]
@@ -352,6 +360,7 @@ class ToolRegistry:
         self.system = system
         self.music = music
         self.config = config or {}
+        self.last_face_expression: str | None = None
         self._specs: dict[str, ToolSpec] = {}
         self._register_all()
 
@@ -367,6 +376,22 @@ class ToolRegistry:
         web = self.web
         system = self.system
 
+        self._add(ToolSpec(
+            "change_face",
+            "Muda a expressão facial do BMO imediatamente. Use sempre que a "
+            "emoção da conversa for clara (o usuário está feliz, triste, bravo, "
+            "confuso etc.) ou quando ele pedir uma cara específica. A expressão "
+            "fica visível por alguns segundos e depois volta ao estado normal.",
+            _object({
+                "expression": _string(
+                    "Expressão facial desejada.",
+                    list(FACE_EXPRESSIONS),
+                )
+            }, ["expression"]),
+            self._change_face,
+            activity="processing",
+            timeout_s=5.0,
+        ))
         self._add(ToolSpec(
             "web_search",
             "Pesquisa notícias e informações atuais na internet (DuckDuckGo). "
@@ -662,6 +687,23 @@ class ToolRegistry:
 
     # -- consulta ---------------------------------------------------------
 
+    def _change_face(self, expression: str) -> dict[str, Any]:
+        """Executa a ferramenta de face e devolve o valor canônico validado.
+
+        O evento em tempo real é emitido pelo agente depois que esta função
+        retorna sucesso; assim o mesmo resultado também volta ao modelo.
+        """
+        canonical = normalize_face_expression(expression)
+        if canonical is None:
+            return {"error": f"Expressão facial inválida: {expression}"}
+        self.last_face_expression = canonical
+        log.info("Face solicitada pelo modelo: %s", canonical)
+        return {
+            "expression": canonical,
+            "label": face_label(canonical),
+            "changed": True,
+        }
+
     def schemas(self) -> list[dict[str, Any]]:
         return [spec.schema() for spec in self._specs.values()]
 
@@ -678,6 +720,10 @@ class ToolRegistry:
         if spec is None or not isinstance(arguments, dict):
             return dict(arguments or {})
         normalized = normalize_aliases(spec.parameters, arguments)
+        if spec.name == "change_face":
+            canonical_face = normalize_face_expression(normalized.get("expression"))
+            if canonical_face is not None:
+                normalized["expression"] = canonical_face
         properties = (spec.parameters or {}).get("properties") or {}
         if not properties:
             return {}
@@ -711,6 +757,10 @@ class ToolRegistry:
         if not isinstance(args, dict):
             return ToolResult(False, {"error": "Argumentos inválidos."})
         args = normalize_aliases(spec.parameters, args)
+        if spec.name == "change_face":
+            canonical_face = normalize_face_expression(args.get("expression"))
+            if canonical_face is not None:
+                args["expression"] = canonical_face
         args, invalid = validate_arguments(spec.parameters, args)
         if invalid is not None:
             return ToolResult(False, {"error": invalid})

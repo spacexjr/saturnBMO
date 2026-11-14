@@ -276,6 +276,82 @@ def test_schemas_for_routes_by_intent():
     assert "web_search" in web_names
 
 
+def test_change_face_is_always_offered_and_normalizes_aliases():
+    registry = build_registry()
+    schemas = {item["function"]["name"]: item for item in registry.schemas()}
+    assert "change_face" in schemas
+    expression_schema = schemas["change_face"]["function"]["parameters"]["properties"]["expression"]
+    assert "happy" in expression_schema["enum"]
+    assert "processing" in expression_schema["enum"]
+
+    # Conversa livre e perguntas locais também podem mudar a face.
+    assert "change_face" in {
+        item["function"]["name"] for item in registry.schemas_for("Oi BMO, tudo bem?")
+    }
+    assert "change_face" in {
+        item["function"]["name"] for item in registry.schemas_for("Que horas são?")
+    }
+
+    result = run(registry.execute("change_face", {"expression": "feliz"}))
+    assert result.ok is True
+    assert result.data["expression"] == "happy"
+    assert result.data["label"] == "Feliz"
+    assert registry.last_face_expression == "happy"
+
+    invalid = run(registry.execute("change_face", {"expression": "dançando"}))
+    assert invalid.ok is False
+    assert "expression" in invalid.data["error"]
+
+
+class FaceRegistry(FakeRegistry):
+    def names(self) -> list[str]:
+        return ["change_face"]
+
+    async def execute(self, name: str, arguments: dict) -> ToolResult:
+        self.executed.append((name, arguments))
+        return ToolResult(
+            True,
+            {"expression": "happy", "label": "Feliz", "changed": True},
+        )
+
+
+def test_change_face_emits_real_face_event_without_activity(monkeypatch):
+    agent, registry = make_agent(
+        monkeypatch,
+        [
+            {
+                "message": {
+                    "content": "",
+                    "tool_calls": [
+                        {"function": {"name": "change_face", "arguments": {"expression": "feliz"}}}
+                    ],
+                }
+            },
+            {"message": {"content": "Que bom que você está feliz!"}},
+        ],
+        FaceRegistry(),
+    )
+    emit = Emitter()
+    result = run(agent.run("Estou muito feliz hoje", emit))
+    assert registry.executed == [("change_face", {"expression": "feliz"})]
+    assert result.text == "Que bom que você está feliz!"
+    face_events = [fields for event_type, fields in emit.events if event_type == "face"]
+    assert face_events == [
+        {
+            "expression": "happy",
+            "label": "Feliz",
+            "tool": "change_face",
+            "hold_ms": 8000,
+        }
+    ]
+    activity_tools = [
+        fields.get("tool")
+        for event_type, fields in emit.events
+        if event_type == "activity"
+    ]
+    assert "change_face" not in activity_tools
+
+
 def test_pending_confirmation_is_explicit_state(monkeypatch):
     pending = PendingConfirmation("abc", "delete_file", {"path": "x"}, "Confirma?", "editing_file")
 

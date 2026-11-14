@@ -52,6 +52,7 @@ import com.spacexjr.saturnbmo.AppSettings
 import com.spacexjr.saturnbmo.BmoEngine
 import com.spacexjr.saturnbmo.BmoState
 import com.spacexjr.saturnbmo.BmoUiState
+import com.spacexjr.saturnbmo.BuildConfig
 import com.spacexjr.saturnbmo.ConnectionState
 import com.spacexjr.saturnbmo.LogEntry
 import com.spacexjr.saturnbmo.ServiceStatus
@@ -514,6 +515,28 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(12.dp))
+        SectionCard(title = "Sobre o aplicativo") {
+            Text(
+                "Versão ${BuildConfig.VERSION_NAME} (${BuildConfig.BUILD_TYPE}) • código ${BuildConfig.VERSION_CODE}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = BmoInk,
+            )
+            val installedAt = remember(context, context.packageName) { installedStamp(context) }
+            if (installedAt != null) {
+                Text(
+                    installedAt,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = BmoInkSoft,
+                )
+            }
+            Text(
+                "Se a data de instalação for antiga, o APK novo ainda não foi instalado.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = BmoInkSoft,
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
         SectionCard(title = "Logs do aplicativo") {
             if (logs.isEmpty()) {
                 Text("Nenhum log ainda.", color = BmoInkSoft, style = MaterialTheme.typography.bodyMedium)
@@ -611,3 +634,19 @@ private fun SwitchRow(
 }
 
 private fun ok(value: Boolean) = if (value) "ok" else "indisponível"
+
+/**
+ * Data em que o APK instalado foi atualizado no aparelho.
+ *
+ * Serve para conferir, sem precisar do PC, se a versão em execução é a que
+ * acabou de ser compilada.
+ */
+@Suppress("DEPRECATION")
+private fun installedStamp(context: android.content.Context): String? = runCatching {
+    val info = context.packageManager.getPackageInfo(context.packageName, 0)
+    val when_ = java.util.Date(info.lastUpdateTime)
+    val formatted = java.text.SimpleDateFormat("dd/MM/yyyy 'às' HH:mm", java.util.Locale("pt", "BR"))
+        .format(when_)
+    val packageName = context.packageName
+    "Instalado em $formatted ($packageName)"
+}.getOrNull()

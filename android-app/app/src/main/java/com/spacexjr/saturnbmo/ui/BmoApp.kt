@@ -41,6 +41,9 @@ fun BmoApp(engine: BmoEngine) {
     var settings by remember { mutableStateOf(engine.currentSettings()) }
     var pendingActivate by remember { mutableStateOf(false) }
     var locationPrompted by remember { mutableStateOf(false) }
+    // Ativa o microfone sozinho depois que a conexão cai bem; só uma vez por
+    // abertura, para respeitar uma pausa manual feita depois.
+    var autoMicHandled by remember { mutableStateOf(false) }
     val ui by engine.uiState.collectAsStateWithLifecycle()
     val logs by engine.logs.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -67,7 +70,7 @@ fun BmoApp(engine: BmoEngine) {
                 BmoForegroundService.start(context)
                 requestNotificationPermission(context)
             }
-            val started = engine.startListening()
+            val started = engine.requestListening()
             if (pendingActivate && started) engine.activateOnce()
         } else {
             Toast.makeText(
@@ -106,6 +109,24 @@ fun BmoApp(engine: BmoEngine) {
         }
     }
 
+    // Ativa o microfone automaticamente ao conectar. Se a permissão ainda não
+    // foi dada, o pedido aparece uma vez; depois disso o BMO já sobe ouvindo.
+    LaunchedEffect(ui.connected) {
+        if (!ui.connected || autoMicHandled) return@LaunchedEffect
+        autoMicHandled = true
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            if (settings.backgroundListening) {
+                BmoForegroundService.start(context)
+                requestNotificationPermission(context)
+            }
+            engine.requestListening()
+        } else {
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
     val beginListening: (Boolean) -> Unit = { activate ->
         pendingActivate = activate
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
@@ -115,7 +136,7 @@ fun BmoApp(engine: BmoEngine) {
                 BmoForegroundService.start(context)
                 requestNotificationPermission(context)
             }
-            val started = engine.startListening()
+            val started = engine.requestListening()
             if (activate && started) engine.activateOnce()
             pendingActivate = false
         } else {

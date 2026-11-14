@@ -96,6 +96,8 @@ async def main() -> int:
         audio_rate = 22050
         transcript = ""
         response = ""
+        faces: list[dict] = []
+        restores: list[dict] = []
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
             try:
@@ -119,6 +121,15 @@ async def main() -> int:
             elif etype == "audio.start":
                 audio_rate = int(event.get("sample_rate", audio_rate))
                 print(f"[teste] Evento: audio.start {audio_rate} Hz")
+            elif etype == "face":
+                faces.append(event)
+                print(
+                    "[teste] Rosto aplicado: "
+                    f"{event.get('expression')} ({event.get('label')}) via {event.get('tool')}"
+                )
+            elif etype == "face.restore":
+                restores.append(event)
+                print(f"[teste] Rosto restaurado: {event.get('expression')} motivo {event.get('reason')}")
             elif etype in {"state", "wakeword.detected", "wakeword.not_detected",
                            "error", "audio.end", "audio.unavailable"}:
                 detail = event.get("detail") or event.get("message") or ""
@@ -136,6 +147,32 @@ async def main() -> int:
                 out.setframerate(audio_rate)
                 out.writeframes(pcm_out)
             print(f"[teste] Áudio da resposta salvo em {args.output} ({len(pcm_out)} bytes)")
+
+            # Todo o PCM já foi recebido: é o mesmo ponto em que o app Android
+            # termina de esvaziar o AudioTrack e avisa o backend.
+            print("[teste] Simulando fim da reprodução (playback.done).")
+            await ws.send(json.dumps({"type": "playback.done"}))
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                try:
+                    message = await asyncio.wait_for(ws.recv(), timeout=20)
+                except asyncio.TimeoutError:
+                    break
+                if isinstance(message, bytes):
+                    continue
+                event = json.loads(message)
+                etype = event.get("type")
+                if etype == "face.restore":
+                    restores.append(event)
+                    print(
+                        f"[teste] Rosto restaurado: {event.get('expression')} "
+                        f"motivo {event.get('reason')}"
+                    )
+                    continue
+                if etype == "state":
+                    print(f"[teste] Evento: state {event.get('state')}")
+                    if event.get("state") in {"listening", "idle"}:
+                        break
         else:
             print("[teste] Nenhum áudio de resposta recebido (veja audio.unavailable).")
         ok = bool(transcript) and bool(response) and bool(audio_chunks)

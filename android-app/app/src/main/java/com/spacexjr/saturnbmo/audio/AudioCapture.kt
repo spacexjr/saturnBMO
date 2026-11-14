@@ -93,25 +93,33 @@ class AudioCapture(
         worker = thread(name = "bmo-audio-capture", isDaemon = true) {
             Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
             val buffer = ByteArray(FRAME_BYTES)
-            while (running) {
-                val read = try {
-                    recorder.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
-                } catch (exc: Exception) {
-                    if (running) listener.onError("Erro ao ler o microfone: ${exc.message}")
-                    break
-                }
-                if (read > 0) {
-                    val now = System.currentTimeMillis()
-                    if (now - lastLevelAt > 80) {
-                        lastLevelAt = now
-                        listener.onLevel(rms(buffer, read))
+            var failure: String? = null
+            try {
+                while (running) {
+                    val read = try {
+                        recorder.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
+                    } catch (exc: Exception) {
+                        if (running) failure = "Erro ao ler o microfone: ${exc.message}"
+                        break
                     }
-                    if (!muted) listener.onPcm(buffer.copyOf(read))
-                } else if (read < 0) {
-                    if (running) listener.onError("O microfone retornou um erro de leitura.")
-                    break
+                    if (read > 0) {
+                        val now = System.currentTimeMillis()
+                        if (now - lastLevelAt > 80) {
+                            lastLevelAt = now
+                            listener.onLevel(rms(buffer, read))
+                        }
+                        if (!muted) listener.onPcm(buffer.copyOf(read))
+                    } else if (read < 0) {
+                        if (running) failure = "O microfone retornou um erro de leitura."
+                        break
+                    }
                 }
+            } finally {
+                // Uma falha de leitura encerra o worker: o estado precisa refletir
+                // isso para que o BmoEngine possa recriar a captura.
+                running = false
             }
+            failure?.let(listener::onError)
         }
         Log.i(TAG, "Captura iniciada em $SAMPLE_RATE Hz")
         return true

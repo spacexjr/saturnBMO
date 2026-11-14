@@ -126,6 +126,8 @@ Todos têm `type`, `seq` e `ts`, salvo indicação em contrário.
 | `assistant.text.delta` | `text`, `id` | Fragmento da resposta do LLM ou ação local. |
 | `assistant.text.done` | `text`, `id`, `audio_available` | Resposta completa. |
 | `activity` | `activity`, `status`, `label`, `tool?` | Operação real em andamento (`processing`, `searching_web`, `opening_app`, `editing_file`, `success`, `error` etc.). `status`: `start`, `done` ou `error`. |
+| `face` | `expression`, `label`, `tool?`, `hold_ms?` | Expressão solicitada pelo modelo via `change_face`. O app aplica o PNG correspondente em `assets/faces`. |
+| `face.restore` | `expression`, `reason`, `grace_ms` | Devolve o rosto ao estado automático (novo pedido, fim da reprodução, erro ou timeout). |
 | `music` | `player`, `is_bitchord`, `status`, `title`, `artist`, `album`, `length_s`, `volume`, `volume_percent`, `position_ms`, `duration_ms`, `queue_length`, `verified`, `art_url` | Metadados reais do Mopidy/YouTube Music (ou MPRIS/BitChord como alternativa). |
 | `confirmation.request` | `id`, `tool`, `prompt` | Ação destrutiva aguardando confirmação explícita. |
 | `confirmation.result` | `id`, `approved`, `ok`, `message` | Resultado da confirmação e da execução. |
@@ -142,10 +144,10 @@ Depois de `audio.start`, o servidor envia bytes PCM16LE crus, sem cabeçalho. O 
 
 1. abrir o `AudioTrack` na taxa e canais informados;
 2. escrever os bytes recebidos;
-3. considerar a reprodução concluída quando o buffer consumir os frames;
-4. enviar `playback.started` ao começar e `playback.done` ao terminar.
+3. só considerar a reprodução concluída depois de receber `audio.end` **e** de o `AudioTrack` consumir os frames na fila;
+4. enviar `playback.started` ao começar e `playback.done` ao terminar — sempre, inclusive em erro/timeout, para o microfone ser liberado.
 
-O backend envia blocos de aproximadamente 100 ms e mantém a fila curta. A reprodução real é medida pelo `AudioTrack` no Android, não apenas pelo fim do envio.
+O backend envia blocos de aproximadamente 100 ms e mantém a fila curta. O app não deve encerrar a captura ao receber `audio.end`; ele apenas marca o fim do stream e espera o buffer esvaziar.
 
 ## 4. Fluxo de voz
 
@@ -191,6 +193,19 @@ App                         Backend
 
 Fluxo por texto: `text` → `transcript` → `assistant.text.delta` → `assistant.text.done` → `audio.start` → binários → `audio.end`.
 
+### Rosto no aplicativo (comportamento local)
+
+O backend só envia `face` quando o modelo (ou um pedido explícito) escolhe uma expressão. O resto é decidido no aparelho, sem tráfego extra:
+
+- a boca (`speaking_01..04`) só anima quando há som saindo do alto-falante; `state: speaking` sem áudio mostra `thinking` em vez de mexer a boca em silêncio;
+- `state: listening` significa microfone aguardando a wake word: o rosto fica calmo (`idle`) e só usa `listening` quando um evento `vad` indica fala de verdade;
+- emoções detectadas no texto (alegria, tristeza, surpresa, raiva, amor, sono) entram como camadas 8-bit sobre o rosto, inclusive durante a fala;
+- após **10 s** sem nenhum evento relevante, sem fala, sem música e sem operação, o app mostra `sleeping` (olhos fechados) com Zzz; qualquer evento ou fala acorda na hora;
+- ruído não conta como atividade: `vad`, transcrição vazia, `wakeword.not_detected` e `state: listening` não reiniciam a contagem do sono. Um `vad` preso em `true` também não impede o sono;
+- o microfone sobe sozinho depois da conexão; a permissão é pedida uma vez e uma pausa manual é respeitada;
+- com música tocando (`music.status = playing`), o tema vira `EQUALIZER` com título, artista e barras reagindo ao áudio, e o BMO não dorme. O app consulta Mopidy e MPRIS, então também funciona quando a música vem do navegador ou de outro player;
+- erro, confirmação pendente, `change_face` ativo e teste de microfone também mantêm o rosto acordado.
+
 ## 5. Palavra de ativação
 
 O modo padrão é `hybrid`:
@@ -213,6 +228,7 @@ O modelo acústico ainda não foi validado com voz humana real; veja [LIMITACOES
 
 O backend reconhece hora, data e clima antes de chamar o LLM. O LLM pode chamar ferramentas reais por tool calling nativo, mas apenas as registradas no backend:
 
+- rosto: `change_face`;
 - arquivos: `list_files`, `search_files`, `read_file`, `create_file`, `write_file`, `edit_file`, `rename_file`, `copy_file`, `move_file`, `create_directory`, `delete_file`, `delete_directory`, `get_file_metadata`;
 - internet: `web_search`, `open_url`, `read_webpage`, `extract_page_content`, `summarize_web_content`;
 - aplicativos: `list_apps`, `launch_app`, `close_app`, `minimize_app`, `maximize_app`, `restore_app`, `foreground_app`, `list_windows`, `list_running_apps`;
@@ -220,6 +236,27 @@ O backend reconhece hora, data e clima antes de chamar o LLM. O LLM pode chamar 
 - sistema: `system_info`.
 
 Cada ferramenta tem validação própria. Não há execução de shell arbitrário nem `sudo` automático. `delete_file` e `delete_directory` retornam `confirmation.request` e só executam após `confirmation` com `approved: true` (ou “sim” por voz/texto).
+
+### `change_face`
+
+`change_face` recebe `expression` com um destes valores canônicos:
+
+`neutral`, `happy`, `sad`, `thinking`, `confused`, `surprised`, `excited`, `sleepy`, `love`, `angry`, `listening`, `speaking`, `processing`, `error`.
+
+O backend normaliza apelidos em português (`feliz` → `happy`, `bravo` → `angry` etc.) antes de validar. Quando a execução é bem-sucedida, o agente envia imediatamente:
+
+```json
+{"type":"face","expression":"happy","label":"Feliz","tool":"change_face","hold_ms":8000}
+```
+
+O app aplica a expressão como override temporário (o modelo vence o estado automático, exceto em `error`) e limpa o override ao receber `face.restore`, ao começar um novo pedido ou ao expirar o `hold_ms`. O backend também envia `face.restore` ao final da reprodução, em erro, em `audio.unavailable` e em timeout, para a expressão nunca ficar presa.
+
+Pedidos explícitos como “mude sua cara para feliz”, “fique triste” ou “faça uma cara de surpreso” são reconhecidos no backend **antes** do LLM (`detect_face_intent`), porque o modelo pequeno às vezes não chama a ferramenta e o STT costuma trocar “BMO” por outra palavra. Nesse caso:
+
+- o evento `face` é enviado imediatamente, ainda durante o “pensando”;
+- a expressão pedida pelo usuário **prevalece** sobre uma escolha diferente do modelo no mesmo turno;
+- a resposta falada continua vindo do LLM normalmente;
+- se o modelo chamar `change_face` com a mesma expressão, o evento duplicado é ignorado.
 
 As ferramentas de arquivo dependem de uma pasta autorizada em `backend/data/access.json`. Sem autorização, retornam erro. As ferramentas novas de música usam o Mopidy local e o YouTube Music (`ytmusicapi` + `yt-dlp`); o BitChord continua acessível por MPRIS nas ferramentas legadas.
 

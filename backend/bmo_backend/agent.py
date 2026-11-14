@@ -66,6 +66,15 @@ Ferramentas:
   Só use mopidy_start se o usuário pedir para iniciar o Mopidy ou se você já
   confirmou que o serviço está parado; não insista depois de um erro de conexão.
 - Prefira respostas curtas, em português brasileiro, sem emojis e sem markdown.
+- Você controla o rosto do BMO com a ferramenta change_face. Use-a sempre que a
+  emoção da conversa for clara e também quando a pessoa pedir uma expressão.
+  Valores aceitos: neutral, happy, sad, thinking, confused, surprised, excited,
+  sleepy, love, angry, listening, speaking, processing, error.
+  Exemplos: alguém diz "estou muito feliz hoje" -> change_face happy; alguém
+  pergunta "você está bravo comigo?" -> change_face confused; uma notícia triste
+  -> change_face sad. Não narre a chamada nem diga "vou mudar a face"; apenas
+  use a ferramenta e responda naturalmente. Não use change_face em todas as
+  frases: escolha só quando houver emoção ou pedido explícito.
 - Quando o usuário pedir para listar aplicativos instalados, use list_apps (com
   query quando houver um tipo, como música ou navegador). Quando pedir o que
   está aberto agora, use list_running_apps. Para abrir ou fechar, use launch_app
@@ -225,14 +234,21 @@ class ToolAgent:
                         # resposta: encerra as ferramentas e pede a resposta final.
                         return await self._final_answer(messages, user_text, used)
                     seen_calls.add(signature)
-                    await emit(
-                        "activity",
-                        activity=self._activity_for(name),
-                        status="start",
-                        label=self._label_for(name),
-                        tool=name,
-                    )
+                    if name != "change_face":
+                        await emit(
+                            "activity",
+                            activity=self._activity_for(name),
+                            status="start",
+                            label=self._label_for(name),
+                            tool=name,
+                        )
+                    log.info("Tool call recebido: %s %s", name, canonical)
                     result = await self.registry.execute(name, raw_args)
+                    log.info(
+                        "Ferramenta executada: %s -> %s",
+                        name,
+                        "ok" if result.ok else "erro",
+                    )
                     if result.pending is not None:
                         await emit(
                             "confirmation.request",
@@ -252,6 +268,17 @@ class ToolAgent:
                             tools_used=used,
                             pending=result.pending,
                         )
+                    if name == "change_face" and result.ok:
+                        payload = result.data or {}
+                        expression = str(payload.get("expression") or "")
+                        if expression:
+                            await emit(
+                                "face",
+                                expression=expression,
+                                label=str(payload.get("label") or expression),
+                                tool=name,
+                                hold_ms=8000,
+                            )
                     if name in {"music_status"} or (
                         name == "music_control" and result.ok
                     ):
@@ -264,7 +291,9 @@ class ToolAgent:
                         payload = result.data
                         if "status" in payload or "title" in payload or "track" in payload:
                             await emit("music", **payload)
-                    if name in {"music_status", "music_control"} and result.ok:
+                    if name == "change_face":
+                        pass
+                    elif name in {"music_status", "music_control"} and result.ok:
                         await emit(
                             "activity",
                             activity="playing_music",

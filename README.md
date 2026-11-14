@@ -47,6 +47,10 @@ A comunicação acontece pela rede local usando WebSocket autenticado. O áudio 
 
 - Rosto do BMO em tela cheia, orientação paisagem e sem barras do sistema.
 - Estados visuais para idle, listening, thinking, speaking, sleeping, capturing, error e warmup.
+- **Expressões humanas durante a conversa**: piscadas em quase todos os rostos, emoção extraída do texto da resposta (alegria, tristeza, surpresa) e camadas 8-bit por cima da fala; a boca só anima quando há som saindo do alto-falante.
+- **Dorme sozinho após 10 s** sem atividade, com `assets/faces/sleeping` (olhos fechados) e Zzz animado. Ruído do microfone (VAD, transcrição vazia) não conta como atividade; wake word real, fala, pergunta ou operação acorda na hora.
+- **Microfone automático**: ao conectar, o app pede a permissão uma vez e já começa ouvindo a wake word, sem precisar tocar em **Ouvir**.
+- **Rosto de música** (`EQUALIZER`) enquanto uma faixa estiver tocando, com título, artista e barras reagindo ao áudio; a música impede o BMO de dormir.
 - Cenas procedurais em estilo 8-bit sobre os PNGs originais: clima, astronomia, matemática, ciência e música.
 - Indicadores visuais de operações reais: pesquisa, leitura, abertura de aplicativos, arquivos, sistema, confirmação, sucesso e erro.
 - Toque no rosto para mostrar ou ocultar controles; toque longo para abrir os ajustes.
@@ -59,6 +63,7 @@ A comunicação acontece pela rede local usando WebSocket autenticado. O áudio 
 - Whisper.cpp disponível como alternativa.
 - Wake word híbrida: classificador acústico ONNX `saturnbmo.onnx` com verificação por transcrição.
 - Conversa com Ollama em português do Brasil, com tool calling, validação de argumentos, timeout por ferramenta e proteção contra chamadas duplicadas.
+- Ferramenta real `change_face(expression)`: o modelo escolhe uma das expressões existentes em `assets/faces` e o app aplica a animação em tempo real, com restauração automática ao estado normal.
 - Recuperação de chamadas que o modelo eventualmente imprime como JSON: somente ferramentas registradas e argumentos válidos podem ser executados.
 - Síntese de voz local com Piper em português do Brasil e fallback para espeak-ng.
 - Limpeza de Markdown, blocos de código e conteúdo interno das ferramentas antes da resposta falada.
@@ -260,8 +265,19 @@ Consulte o [guia de música](docs/MUSICA.md) para os detalhes.
 ### 2. Instalar no dispositivo
 
 ```bash
+./scripts/install_android.sh
+```
+
+O script compila, instala o APK de depuração (`com.spacexjr.saturnbmo.debug`) e
+mostra a versão e a data de instalação registradas no aparelho. Se preferir
+instalar um APK já compilado:
+
+```bash
 adb install -r android-app/app/build/outputs/apk/debug/app-debug.apk
 ```
+
+Para conferir sem o PC se a versão instalada é a nova, abra
+**Ajustes → Sobre o aplicativo**: a data mostrada é a da instalação do APK.
 
 ### 3. Conectar ao computador
 
@@ -270,7 +286,7 @@ adb install -r android-app/app/build/outputs/apk/debug/app-debug.apk
 3. Informe o IP do PC, a porta `8765` e o token salvo em `backend/data/token`.
 4. Utilize **Testar** para verificar LLM, STT e TTS.
 5. Se estiver tudo certo, selecione **Salvar e conectar**.
-6. Autorize o microfone e, opcionalmente, a localização.
+6. Autorize o microfone (o pedido aparece sozinho na primeira conexão) e, opcionalmente, a localização. Depois disso o app já começa ouvindo ao conectar, sem precisar tocar em **Ouvir**.
 
 Para desenvolvimento via USB:
 
@@ -340,10 +356,16 @@ Exemplo de configuração do Faster-Whisper:
   "compute_type": "int8",
   "language": "pt",
   "beam_size": 5,
+  "cpu_threads": 4,
   "num_workers": 1,
   "vad_filter": true
 }
 ```
+
+`cpu_threads` limita o CTranslate2 a 4 núcleos. Sem esse limite, o modelo
+`medium` podia ocupar todos os núcleos em uma única transcrição e travar o
+servidor. Áudios novos são descartados enquanto uma inferência está em
+andamento, em vez de enfileirar threads.
 
 O perfil `medium`/`int8` é o padrão documentado atualmente. Em uma medição registrada no projeto, a inferência levou aproximadamente 3,4 segundos para processar 1,7 segundo de áudio em CPU. Se a latência for alta, experimente o modelo `small`.
 

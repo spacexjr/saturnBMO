@@ -1199,6 +1199,7 @@ private fun DrawScope.drawEmotion(
         BmoFaceEmotion.LOVE -> drawHearts(time, particles)
         BmoFaceEmotion.ANGRY -> drawAngry(time, theme)
         BmoFaceEmotion.SLEEPY -> drawSleepy(time)
+        BmoFaceEmotion.SLEEPING -> drawSleeping(time)
         BmoFaceEmotion.SAD -> if (theme != BmoFaceTheme.RAINY && theme != BmoFaceTheme.STORM) {
             drawTears(time, faceRect)
         }
@@ -1284,6 +1285,25 @@ private fun DrawScope.drawSleepy(time: Long) {
             y,
             pixel = 3f + index * 1.2f,
             color = BmoInk.copy(alpha = 0.55f * (1f - progress)),
+        )
+    }
+}
+
+private fun DrawScope.drawSleeping(time: Long) {
+    // Penumbra suave + "Zzz" subindo devagar, por cima dos olhos fechados
+    // do PNG sleeping_01/02.
+    drawRect(Color(0xFF04121A).copy(alpha = 0.12f))
+    repeat(3) { index ->
+        val progress = ((time / 3600f + index * 0.34f) % 1f)
+        val y = size.height * (0.36f - progress * 0.20f)
+        val x = size.width * (0.70f + index * 0.065f)
+        val alpha = (0.20f + 0.65f * (1f - progress)) * (0.55f + index * 0.15f)
+        drawPixelText(
+            "Z",
+            x,
+            y,
+            pixel = 4f + index * 2.2f,
+            color = BmoInk.copy(alpha = alpha.coerceIn(0f, 0.85f)),
         )
     }
 }

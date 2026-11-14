@@ -154,10 +154,18 @@ class BmoFaceClassifierTest {
         )
         assertEquals(BmoFaceTheme.RAINY, visual.theme)
         assertEquals(BmoFaceEmotion.SPEAKING, visual.emotion)
+        // A boca (frames "speaking") só entra quando o áudio está tocando.
         assertEquals(
             "speaking",
             com.spacexjr.saturnbmo.ui.face.BmoFaceController.expressionKeyFor(
-                BmoUiState(faceState = BmoState.SPEAKING),
+                BmoUiState(faceState = BmoState.SPEAKING, audioPlaying = true),
+                visual,
+            ),
+        )
+        assertEquals(
+            "thinking",
+            com.spacexjr.saturnbmo.ui.face.BmoFaceController.expressionKeyFor(
+                BmoUiState(faceState = BmoState.SPEAKING, audioPlaying = false),
                 visual,
             ),
         )

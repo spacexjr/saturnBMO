@@ -284,8 +284,12 @@ object BmoFaceClassifier {
     private val sleepyWords = listOf("sono", "dormir", "cansado", "cansada", "boa noite")
     private val confusedWords = listOf("confuso", "confusa", "nao entendi", "nao sei", "duvida")
 
-    private fun detectEmotion(user: String, assistant: String): BmoFaceEmotion? {
-        val text = user.ifBlank { assistant }
+    private fun detectEmotion(user: String, assistant: String): BmoFaceEmotion? =
+        emotionIn(user) ?: emotionIn(assistant)
+
+    /** Emoção explícita no texto, na ordem do mais forte para o mais sutil. */
+    private fun emotionIn(text: String): BmoFaceEmotion? {
+        if (text.isBlank()) return null
         return when {
             hasAny(text, loveWords) -> BmoFaceEmotion.LOVE
             hasAny(text, angryWords) -> BmoFaceEmotion.ANGRY

@@ -67,7 +67,9 @@ class BmoForegroundService : Service() {
                         manager.notify(NOTIFICATION_ID, buildNotification(text, detail))
                         // Encerra o serviço quando o usuário pausa o microfone.
                         // Enquanto ainda está conectando, a notificação permanece.
-                        if (state.connection == ConnectionState.CONNECTED && !state.listening) {
+                        if (state.connection == ConnectionState.CONNECTED &&
+                            !state.listening && !state.listeningRequested
+                        ) {
                             val since = emptySince ?: System.currentTimeMillis().also { emptySince = it }
                             if (System.currentTimeMillis() - since > 4000) {
                                 stopForegroundCompat()

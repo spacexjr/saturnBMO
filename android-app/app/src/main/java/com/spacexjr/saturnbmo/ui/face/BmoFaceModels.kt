@@ -53,12 +53,42 @@ enum class BmoFaceEmotion {
     SURPRISED,
     EXCITED,
     SLEEPY,
+    SLEEPING,
     LOVE,
     ANGRY,
     LISTENING,
     SPEAKING,
     PROCESSING,
-    ERROR,
+    ERROR;
+
+    companion object {
+        /** Converte o valor canônico enviado pelo backend (aceita apelidos comuns). */
+        fun fromCode(code: String?): BmoFaceEmotion? {
+            val value = code?.trim()?.lowercase().orEmpty()
+            if (value.isEmpty()) return null
+            return when (
+                java.text.Normalizer.normalize(value, java.text.Normalizer.Form.NFD)
+                    .replace(Regex("\\p{M}+"), "")
+            ) {
+                "neutral", "idle", "neutro" -> NEUTRAL
+                "happy", "feliz", "alegre" -> HAPPY
+                "sad", "triste" -> SAD
+                "thinking", "pensando" -> THINKING
+                "confused", "confuso" -> CONFUSED
+                "surprised", "surpreso" -> SURPRISED
+                "excited", "animado" -> EXCITED
+                "sleepy", "sonolento", "sono" -> SLEEPY
+                "sleeping", "dormindo", "dormir" -> SLEEPING
+                "love", "amor", "apaixonado" -> LOVE
+                "angry", "bravo", "raiva" -> ANGRY
+                "listening", "ouvindo" -> LISTENING
+                "speaking", "falando" -> SPEAKING
+                "processing", "processando" -> PROCESSING
+                "error", "erro" -> ERROR
+                else -> null
+            }
+        }
+    }
 }
 
 /**

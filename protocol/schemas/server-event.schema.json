@@ -25,6 +25,8 @@
     { "$ref": "#/$defs/audioStop" },
     { "$ref": "#/$defs/audioUnavailable" },
     { "$ref": "#/$defs/activity" },
+    { "$ref": "#/$defs/face" },
+    { "$ref": "#/$defs/faceRestore" },
     { "$ref": "#/$defs/music" },
     { "$ref": "#/$defs/confirmationRequest" },
     { "$ref": "#/$defs/confirmationResult" },
@@ -236,6 +238,61 @@
         "status": { "enum": ["start", "done", "error"] },
         "label": { "type": "string" },
         "tool": { "type": "string" }
+      }
+    },
+    "face": {
+      "type": "object",
+      "required": ["type", "expression", "label"],
+      "properties": {
+        "type": { "const": "face" },
+        "expression": {
+          "enum": [
+            "neutral",
+            "happy",
+            "sad",
+            "thinking",
+            "confused",
+            "surprised",
+            "excited",
+            "sleepy",
+            "love",
+            "angry",
+            "listening",
+            "speaking",
+            "processing",
+            "error"
+          ]
+        },
+        "label": { "type": "string" },
+        "tool": { "type": "string" },
+        "hold_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "faceRestore": {
+      "type": "object",
+      "required": ["type", "expression", "reason", "grace_ms"],
+      "properties": {
+        "type": { "const": "face.restore" },
+        "expression": {
+          "enum": [
+            "neutral",
+            "happy",
+            "sad",
+            "thinking",
+            "confused",
+            "surprised",
+            "excited",
+            "sleepy",
+            "love",
+            "angry",
+            "listening",
+            "speaking",
+            "processing",
+            "error"
+          ]
+        },
+        "reason": { "type": "string" },
+        "grace_ms": { "type": "integer", "minimum": 0 }
       }
     },
     "music": {

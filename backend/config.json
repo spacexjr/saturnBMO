@@ -26,6 +26,7 @@
     "compute_type": "int8",
     "language": "pt",
     "beam_size": 5,
+    "cpu_threads": 4,
     "num_workers": 1,
     "vad_filter": true,
     "condition_on_previous_text": false,
@@ -44,7 +45,7 @@
       "Steam",
       "YouTube Music"
     ],
-    "timeout_s": 180,
+    "timeout_s": 60,
     "fallback": {
       "engine": "whisper_cpp",
       "binary": "../tools/whisper.cpp/build/bin/whisper-cli",

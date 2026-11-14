@@ -128,7 +128,9 @@ data class MusicInfo(
 ) {
     val isPlaying: Boolean get() = status.equals("playing", ignoreCase = true)
     val isPaused: Boolean get() = status.equals("paused", ignoreCase = true)
-    val active: Boolean get() = title.isNotBlank() || player.isNotBlank()
+    // Mopidy mantém o título do último track mesmo depois de parar; "parado"
+    // não pode continuar mostrando a face de música para sempre.
+    val active: Boolean get() = isPlaying || isPaused
     val progress: Float
         get() {
             val total = durationMs ?: (lengthS?.times(1000)?.toLong() ?: 0L)
@@ -176,6 +178,8 @@ data class BmoUiState(
     val bmoState: BmoState = BmoState.DISCONNECTED,
     val statusDetail: String = "Configure o servidor do PC para começar.",
     val listening: Boolean = false,
+    /** O usuário/serviço quer o microfone ativo, mesmo durante uma recuperação. */
+    val listeningRequested: Boolean = false,
     val micLevel: Float = 0f,
     val transcript: String = "",
     val assistantText: String = "",
@@ -187,6 +191,15 @@ data class BmoUiState(
     val micTesting: Boolean = false,
     val serverSessionId: String = "",
     val faceState: BmoState = BmoState.DISCONNECTED,
+    /** Expressão solicitada pelo modelo via change_face; null = automática. */
+    val faceExpression: String? = null,
+    val faceLabel: String = "",
+    /** O áudio da resposta está saindo pelo alto-falante agora. */
+    val audioPlaying: Boolean = false,
+    /** O VAD do backend está captando fala neste momento. */
+    val vadSpeaking: Boolean = false,
+    /** `elapsedRealtime()` do último evento recebido do servidor. */
+    val lastActivityAtMs: Long = 0L,
     val locationReady: Boolean = false,
     val activity: ActivityInfo? = null,
     val music: MusicInfo? = null,

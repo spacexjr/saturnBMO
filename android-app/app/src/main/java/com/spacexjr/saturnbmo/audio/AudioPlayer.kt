@@ -97,11 +97,23 @@ class AudioPlayer {
         }
     }
 
-    suspend fun waitForPlayback(timeoutMs: Long = 120_000): Boolean {
+    /**
+     * Espera até o AudioTrack consumir tudo o que foi escrito.
+     *
+     * [serverEnded] permite que o chamador só considere a reprodução concluída
+     * depois que o backend sinalizou `audio.end`; sem isso, o primeiro bloco
+     * poderia esvaziar a fila enquanto o restante do áudio ainda está chegando.
+     */
+    suspend fun waitForPlayback(
+        timeoutMs: Long = 120_000,
+        serverEnded: () -> Boolean = { true },
+    ): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (active && System.currentTimeMillis() < deadline) {
             val player = track ?: return true
-            if (player.playbackHeadPosition.toLong() >= totalFrames) return true
+            if (serverEnded() && player.playbackHeadPosition.toLong() >= totalFrames) {
+                return true
+            }
             delay(30)
         }
         return !active
