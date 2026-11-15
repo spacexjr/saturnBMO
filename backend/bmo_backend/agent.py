@@ -523,6 +523,7 @@ class ToolAgent:
             "list_files": ("Listando arquivos", "Lista pronta"),
             "search_files": ("Pesquisando arquivos", "Pesquisa concluída"),
             "system_info": ("Consultando o PC", "Informações prontas"),
+            "change_face": ("Mudando a expressão", "Expressão alterada"),
         }
         start, finish = labels.get(name, ("Processando", "Concluído"))
         return finish if done else start

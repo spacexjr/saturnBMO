@@ -92,6 +92,21 @@ _ARG_ALIASES: dict[str, tuple[str, ...]] = {
     "new_name": ("newName", "name"),
 }
 
+# Sinônimos de valores aceitos por enums de ferramentas (ex.: expressões faciais).
+_VALUE_ALIASES: dict[str, str] = {
+    "feliz": "happy", "alegre": "happy", "contente": "happy",
+    "triste": "sad", "bravo": "angry", "irritado": "angry", "raiva": "angry",
+    "surpreso": "surprised", "surpresa": "surprised",
+    "animado": "excited", "empolgado": "excited",
+    "sonolento": "sleepy", "com sono": "sleepy", "dormindo": "sleepy",
+    "amor": "love", "apaixonado": "love", "coracao": "love",
+    "confuso": "confused", "duvida": "confused",
+    "pensando": "thinking", "pensativo": "thinking", "processando": "processing",
+    "ouvindo": "listening", "escutando": "listening",
+    "falando": "speaking", "fala": "speaking",
+    "erro": "error", "neutro": "neutral", "normal": "neutral",
+}
+
 
 def normalize_aliases(
     parameters: dict[str, Any], arguments: dict[str, Any]
@@ -293,11 +308,23 @@ def validate_arguments(
                 return {}, f"O argumento '{name}' deve ser um objeto."
 
         enum = rule.get("enum")
-        if isinstance(enum, list) and value not in enum:
-            return {}, (
-                f"O argumento '{name}' deve ser um destes valores: "
-                + ", ".join(str(item) for item in enum)
-            )
+        if isinstance(enum, list):
+            if value not in enum and isinstance(value, str):
+                probe = value.strip().lower()
+                value = _VALUE_ALIASES.get(probe, value)
+                if value not in enum:
+                    value = next(
+                        (
+                            item for item in enum
+                            if isinstance(item, str) and item.lower() == probe
+                        ),
+                        value,
+                    )
+            if value not in enum:
+                return {}, (
+                    f"O argumento '{name}' deve ser um destes valores: "
+                    + ", ".join(str(item) for item in enum)
+                )
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             minimum = rule.get("minimum")
             maximum = rule.get("maximum")
@@ -363,6 +390,24 @@ class ToolRegistry:
         self.last_face_expression: str | None = None
         self._specs: dict[str, ToolSpec] = {}
         self._register_all()
+        self._register_face_tool()
+
+    def _register_face_tool(self) -> None:
+        """Registra change_face. A função real fica no nível do módulo."""
+        self._add(ToolSpec(
+            "change_face",
+            "Muda a expressão facial do BMO na tela do Android em tempo real. "
+            "Chame sempre que o usuário pedir para mudar a cara/expressão ou quando "
+            "a conversa tiver um tom emocional claro (piada, tristeza, surpresa, raiva).",
+            _object({
+                "expression": _string(
+                    "Expressão facial desejada.",
+                    enum=list(FACE_EXPRESSIONS),
+                ),
+            }, ["expression"]),
+            self._change_face,
+            activity="processing",
+        ))
 
     # -- registro ---------------------------------------------------------
 
@@ -830,6 +875,8 @@ class ToolRegistry:
                 )
         except TypeError as exc:
             return ToolResult(False, {"error": f"Argumentos inválidos para {spec.name}: {exc}"})
+        if isinstance(result, ToolResult):
+            return result
         if not isinstance(result, dict):
             result = {"result": result}
         if result.get("error"):

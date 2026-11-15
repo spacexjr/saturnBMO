@@ -80,6 +80,8 @@ class BmoEngine private constructor(context: Context) {
     private var captureRecoveryAttempt = 0
     private var wantListening = false
     private var manualDisconnect = false
+    /** true quando a pessoa pausou o microfone de propósito (não reabrir sozinho). */
+    private var userPausedMic = false
     private var captureForTest = false
     private var lastSeq = -1L
     private var currentAssistantId = ""
@@ -371,6 +373,14 @@ class BmoEngine private constructor(context: Context) {
         )
     }
 
+    private fun sendAudioStart(): Boolean = sendJson(
+        JSONObject()
+            .put("type", "audio.start")
+            .put("format", "pcm_s16le")
+            .put("sample_rate", AudioCapture.SAMPLE_RATE)
+            .put("channels", AudioCapture.CHANNELS)
+    )
+
     fun startListening(): Boolean {
         if (!_ui.value.connected) {
             fail("Conecte-se ao PC antes de ativar o microfone.")
@@ -381,7 +391,29 @@ class BmoEngine private constructor(context: Context) {
             fail("Permissão de microfone não concedida. Autorize em Configurações do Android.")
             return false
         }
-        if (capture?.isRunning == true) return true
+        userPausedMic = false
+        // Se a captura já está ativa, apenas retoma a escuta. Ao reconectar, o
+        // servidor precisa receber um novo audio.start para esta sessão.
+        if (capture?.isRunning == true) {
+            wantListening = true
+            if (!sendAudioStart()) {
+                fail("Não foi possível avisar o servidor sobre o áudio.")
+                return false
+            }
+            sendCurrentLocation()
+            _ui.update {
+                it.copy(
+                    listening = true,
+                    listeningRequested = true,
+                    bmoState = BmoState.LISTENING,
+                    faceState = BmoState.LISTENING,
+                    statusDetail = "Microfone ativo. Diga \"Ei, BMO\".",
+                    lastError = null,
+                )
+            }
+            addLog("INFO", "Microfone já ativo, retomando escuta.")
+            return true
+        }
         // Captura antiga que morreu por falha de leitura: descarta antes de abrir outra.
         capture?.let { stale ->
             capture = null
@@ -436,20 +468,18 @@ class BmoEngine private constructor(context: Context) {
         return true
     }
 
-    private fun sendAudioStart(): Boolean = sendJson(
-        JSONObject()
-            .put("type", "audio.start")
-            .put("format", "pcm_s16le")
-            .put("sample_rate", AudioCapture.SAMPLE_RATE)
-            .put("channels", AudioCapture.CHANNELS)
-    )
-
     fun stopListening() {
+        userPausedMic = true
         wantListening = false
         cancelCaptureRecovery()
         _ui.update { it.copy(listeningRequested = false) }
-        if (capture?.isRunning != true && !_ui.value.listening) return
+        if (capture?.isRunning != true && !_ui.value.listening) {
+            stopMicTest()
+            return
+        }
+        // Parada explícita do usuário: libera o microfone de verdade.
         stopCaptureInternal(sendEnd = true)
+        capture = null
         stopMicTest()
         _ui.update {
             it.copy(
@@ -461,7 +491,36 @@ class BmoEngine private constructor(context: Context) {
                 statusDetail = "Microfone pausado.",
             )
         }
-        addLog("INFO", "Microfone pausado.")
+        addLog("INFO", "Microfone pausado pelo usuário.")
+    }
+
+    /** Pausa temporária (app foi para segundo plano), sem perder a intenção de ouvir. */
+    fun pauseListeningForLifecycle() {
+        if (userPausedMic) return
+        cancelCaptureRecovery()
+        stopMicTest()
+        if (capture?.isRunning == true) {
+            stopCaptureInternal(sendEnd = true)
+            capture = null
+        }
+        _ui.update {
+            it.copy(
+                listening = false,
+                micLevel = 0f,
+                bmoState = if (it.bmoState == BmoState.LISTENING) BmoState.IDLE else it.bmoState,
+                faceState = if (it.faceState == BmoState.LISTENING) BmoState.IDLE else it.faceState,
+                statusDetail = "Microfone pausado em segundo plano.",
+            )
+        }
+        addLog("INFO", "Microfone pausado (app em segundo plano).")
+    }
+
+    /** Volta a ouvir sozinho ao reabrir o app, se o usuário não tiver pausado. */
+    fun resumeListeningIfDesired() {
+        if (userPausedMic || !wantListening) return
+        if (!_ui.value.connected || !hasMicrophonePermission()) return
+        if (capture?.isRunning == true && _ui.value.listening) return
+        startListening()
     }
 
     fun toggleListening() {
@@ -470,7 +529,8 @@ class BmoEngine private constructor(context: Context) {
 
     private fun stopCaptureInternal(sendEnd: Boolean) {
         val current = capture
-        capture = null
+        // NÃO definimos capture = null aqui: mantemos a captura ativa
+        // para que a wake word permaneça detectável entre respostas.
         current?.stop()
         captureForTest = false
         if (sendEnd) sendJson(JSONObject().put("type", "audio.end"))
@@ -569,30 +629,10 @@ class BmoEngine private constructor(context: Context) {
     private fun clearModelFace() {
         faceExpiryJob?.cancel()
         faceExpiryJob = null
-        if (_ui.value.faceExpression != null || _ui.value.faceLabel.isNotEmpty()) {
-            _ui.update { it.copy(faceExpression = null, faceLabel = "") }
-        }
-    }
-
-    private fun handleModelFace(json: JSONObject) {
-        val emotion = BmoFaceEmotion.fromCode(json.optString("expression"))
-        if (emotion == null) {
-            addLog("AVISO", "Expressão facial inválida recebida do servidor.")
-            return
-        }
-        val expression = emotion.name.lowercase(Locale.ROOT)
-        val label = json.optString("label").ifBlank { expression }
-        val holdMs = json.optLong("hold_ms", 8000L).coerceIn(500L, 60_000L)
-        faceExpiryJob?.cancel()
-        _ui.update { it.copy(faceExpression = expression, faceLabel = label) }
-        addLog("INFO", "Expressão facial: $label.")
-        // Mesmo que o backend não envie face.restore, a expressão não fica presa.
-        faceExpiryJob = scope.launch {
-            delay(holdMs + 2_000L)
-            if (_ui.value.faceExpression == expression) {
-                _ui.update { it.copy(faceExpression = null, faceLabel = "") }
-                addLog("INFO", "Expressão facial voltou ao estado automático.")
-            }
+        if (_ui.value.faceExpression != null || _ui.value.faceLabel.isNotEmpty() ||
+            _ui.value.modelEmotion != null
+        ) {
+            _ui.update { it.copy(faceExpression = null, faceLabel = "", modelEmotion = null) }
         }
     }
 
@@ -608,7 +648,8 @@ class BmoEngine private constructor(context: Context) {
         faceExpiryJob = scope.launch {
             delay(graceMs)
             if (expression == null || _ui.value.faceExpression == expression) {
-                _ui.update { it.copy(faceExpression = null, faceLabel = "") }
+                clearModelFace()
+                addLog("INFO", "Expressão facial voltou ao estado automático.")
             }
         }
     }
@@ -1280,6 +1321,7 @@ class BmoEngine private constructor(context: Context) {
                         transcript = value,
                         assistantText = "",
                         streamingText = false,
+                        modelEmotion = null,
                         statusDetail = if (value.isBlank()) "Não entendi." else "Fala reconhecida.",
                     )
                 }
@@ -1309,6 +1351,8 @@ class BmoEngine private constructor(context: Context) {
                         streamingText = false,
                         ttsAvailable = json.optBoolean("audio_available", it.ttsAvailable),
                         statusDetail = "Resposta recebida.",
+                        bmoState = BmoState.IDLE,
+                        faceState = BmoState.IDLE,
                     )
                 }
                 addLog("BMO", if (answer.length > 200) answer.take(200) + "..." else answer)
@@ -1386,7 +1430,6 @@ class BmoEngine private constructor(context: Context) {
                 }
                 addLog("AVISO", json.optString("message", "Resposta sem áudio."))
             }
-            "face" -> handleModelFace(json)
             "face.restore" -> handleFaceRestore(json)
             "vad" -> {
                 val speaking = json.optBoolean("speaking")
@@ -1404,8 +1447,23 @@ class BmoEngine private constructor(context: Context) {
             }
             "wakeword.detected" -> {
                 clearModelFace()
-                _ui.update { it.copy(statusDetail = "Palavra de ativação reconhecida.") }
-                addLog("INFO", "Palavra de ativação detectada.")
+                // A captura já está ativa continuamente; ao detectar a wake word,
+                // atualizamos o estado para ESCUTA e preparamos para ouvir a pergunta.
+                wantListening = true
+                _ui.update {
+                    it.copy(
+                        listening = true,
+                        listeningRequested = true,
+                        bmoState = BmoState.LISTENING,
+                        faceState = BmoState.LISTENING,
+                        modelEmotion = null,
+                        faceExpression = null,
+                        faceLabel = "",
+                        statusDetail = "Palavra de ativação reconhecida. Pode falar.",
+                        lastError = null,
+                    )
+                }
+                addLog("INFO", "Palavra de ativação detectada - iniciando escuta da pergunta.")
             }
             "wakeword.activated" -> {
                 addLog("INFO", "Ativação manual aceita pelo servidor.")
@@ -1416,6 +1474,7 @@ class BmoEngine private constructor(context: Context) {
                 addLog("AVISO", message)
             }
             "activity" -> handleActivity(json)
+            "face" -> handleFace(json)
             "music" -> {
                 val incoming = parseMusic(json)
                 _ui.update { state ->
@@ -1518,8 +1577,13 @@ class BmoEngine private constructor(context: Context) {
         refreshMedia()
         refreshLocation()
         startMediaPolling()
-        if (wantListening) {
-            if (capture?.isRunning == true) {
+        if (wantListening || !userPausedMic) {
+            // Abre o microfone automaticamente ao conectar (e reenvia
+            // audio.start quando a captura sobreviveu a uma reconexão).
+            wantListening = true
+            if (!hasMicrophonePermission()) {
+                addLog("AVISO", "Microfone pronto para ouvir; autorize a permissão para ativar.")
+            } else if (capture?.isRunning == true) {
                 // Reconexão: o AudioRecord continuou vivo, mas a nova sessão do
                 // backend ainda não sabe disso. Reanuncia o áudio sem recriar nada.
                 if (sendAudioStart()) {
@@ -1534,6 +1598,8 @@ class BmoEngine private constructor(context: Context) {
                         )
                     }
                     addLog("INFO", "Microfone preservado e reanunciado ao servidor.")
+                } else {
+                    startListening()
                 }
             } else {
                 startListening()
@@ -1554,7 +1620,8 @@ class BmoEngine private constructor(context: Context) {
         }
         if (mapped == BmoState.THINKING || mapped == BmoState.SPEAKING) setAudioMuted(true)
         if (mapped == BmoState.LISTENING || mapped == BmoState.IDLE) {
-            if (!player.isActive) setAudioMuted(false)
+            // Só mantém mudo enquanto há áudio do BMO sendo reproduzido.
+            if (!audioStarted) setAudioMuted(false)
         }
         if (mapped == BmoState.LISTENING && capture?.isRunning != true && wantListening) {
             // O servidor voltou a ouvir, mas a captura local não está ativa.
@@ -1572,6 +1639,28 @@ class BmoEngine private constructor(context: Context) {
             if (mapped == BmoState.ERROR) "ERRO" else "INFO",
             "Estado: ${mapped.label}${if (detail.isNotBlank()) " — $detail" else ""}"
         )
+    }
+
+    private fun handleFace(json: JSONObject) {
+        val raw = json.optString("expression").trim()
+        val emotion = BmoFaceEmotion.fromCode(raw)
+        if (emotion == null) {
+            addLog("AVISO", "O modelo pediu uma expressão facial desconhecida: '$raw'.")
+            return
+        }
+        val expression = emotion.name.lowercase(Locale.ROOT)
+        val label = json.optString("label").ifBlank { expression }
+        faceExpiryJob?.cancel()
+        faceExpiryJob = null
+        _ui.update {
+            it.copy(
+                modelEmotion = emotion,
+                faceExpression = expression,
+                faceLabel = label,
+            )
+        }
+        val source = json.optString("source").ifBlank { "tool" }
+        addLog("INFO", "Face atualizada: $raw (${source}).")
     }
 
     private fun handleActivity(json: JSONObject) {

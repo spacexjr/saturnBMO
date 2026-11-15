@@ -59,6 +59,8 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         // Reaplica ao voltar do segundo plano ou após recriar a janela.
         applyKeepScreenOn()
+        // Se o usuário não pausou o microfone, volta a ouvir automaticamente.
+        engine.resumeListeningIfDesired()
     }
 
     private fun applyKeepScreenOn() {
@@ -72,7 +74,7 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         if (!engine.currentSettings().backgroundListening) {
-            engine.stopListening()
+            engine.pauseListeningForLifecycle()
         }
     }
 

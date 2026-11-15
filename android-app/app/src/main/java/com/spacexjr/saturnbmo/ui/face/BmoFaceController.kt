@@ -43,16 +43,27 @@ object BmoFaceController {
             }
         }
         val activity = ui.activity?.activity ?: BmoActivity.NONE
+        // Emoção pedida explicitamente pelo modelo via `change_face`. Vale até
+        // o próximo turno, mas perde para erro e para a fala em andamento.
+        val requestedEmotion = ui.modelEmotion ?: BmoFaceEmotion.fromCode(ui.faceExpression)
         val automaticEmotion = emotionFor(
             theme = data.theme,
             state = ui.faceState,
             hint = data.emotionHint,
             activity = activity,
             vadSpeaking = ui.vadSpeaking,
+            model = requestedEmotion,
         )
+        // Erro nunca é escondido. Nos demais estados a emoção pedida pelo
+        // modelo entra como camada e a boca de "falando" continua vindo dos
+        // frames de fala.
+        val emotion = when (ui.faceState) {
+            BmoState.ERROR -> BmoFaceEmotion.ERROR
+            else -> requestedEmotion ?: automaticEmotion
+        }
         return BmoFaceVisual(
             data = data,
-            emotion = modelEmotionFor(ui) ?: automaticEmotion,
+            emotion = emotion,
             activity = activity,
         )
     }
@@ -72,18 +83,10 @@ object BmoFaceController {
         if (ui.pendingConfirmation != null) return false
         if (ui.micTesting) return false
         if (ui.faceExpression != null) return false
+        if (ui.modelEmotion != null) return false
         if (ui.activity?.activity?.let { it != BmoActivity.NONE } == true) return false
         if (ui.lastActivityAtMs <= 0L) return false
         return nowMs - ui.lastActivityAtMs >= SLEEP_AFTER_MS
-    }
-
-    /**
-     * Emoção pedida explicitamente pelo modelo via `change_face`.
-     * O estado de erro continua vencendo para não esconder uma falha real.
-     */
-    fun modelEmotionFor(ui: BmoUiState): BmoFaceEmotion? {
-        if (ui.faceState == BmoState.ERROR) return BmoFaceEmotion.ERROR
-        return BmoFaceEmotion.fromCode(ui.faceExpression)
     }
 
     fun emotionFor(
@@ -92,19 +95,28 @@ object BmoFaceController {
         hint: BmoFaceEmotion? = null,
         activity: BmoActivity = BmoActivity.NONE,
         vadSpeaking: Boolean = false,
+        model: BmoFaceEmotion? = null,
     ): BmoFaceEmotion = when (state) {
         BmoState.ERROR -> BmoFaceEmotion.ERROR
         // Enquanto fala, a boca vem dos frames "speaking"; a emoção do texto
         // (alegria, surpresa, tristeza) entra como camada por cima.
         BmoState.SPEAKING -> hint ?: BmoFaceEmotion.SPEAKING
         // O microfone fica sempre ativo esperando a wake word. O rosto só
-        // "ouve" de verdade quando o VAD detecta fala.
-        BmoState.LISTENING -> if (vadSpeaking) BmoFaceEmotion.LISTENING else hint ?: BmoFaceEmotion.NEUTRAL
+        // "ouve" de verdade quando o VAD detecta fala, mas a emoção pedida
+        // pelo modelo continua visível sobre o repouso.
+        BmoState.LISTENING -> when {
+            model != null -> model
+            vadSpeaking -> BmoFaceEmotion.LISTENING
+            else -> hint ?: BmoFaceEmotion.NEUTRAL
+        }
         BmoState.THINKING ->
-            if (theme == BmoFaceTheme.CALCULATING) BmoFaceEmotion.PROCESSING
-            else BmoFaceEmotion.THINKING
+            // Emoção pedida pelo modelo vence o "pensando" logo após a tool call.
+            model ?: (
+                if (theme == BmoFaceTheme.CALCULATING) BmoFaceEmotion.PROCESSING
+                else BmoFaceEmotion.THINKING
+            )
         BmoState.CONNECTING, BmoState.DISCONNECTED -> BmoFaceEmotion.NEUTRAL
-        BmoState.IDLE -> when (activity) {
+        BmoState.IDLE -> model ?: when (activity) {
             BmoActivity.SUCCESS -> BmoFaceEmotion.HAPPY
             BmoActivity.OPENING_APP, BmoActivity.CLOSING_APP,
             BmoActivity.PLAYING_MUSIC, BmoActivity.WAITING_CONFIRMATION ->
@@ -153,11 +165,12 @@ object BmoFaceController {
             BmoState.ERROR -> return "error"
             else -> Unit
         }
-        BmoFaceEmotion.fromCode(ui.faceExpression)?.let { emotion ->
-            // Com áudio tocando a boca continua vindo dos frames "speaking";
-            // a expressão escolhida entra como camada de emoção.
-            if (ui.faceState == BmoState.SPEAKING && ui.audioPlaying) return@let
-            return expressionKeyFor(emotion)
+        // Uma expressão pedida pelo modelo vence ouvindo/pensando/repouso.
+        // Enquanto fala com áudio, a boca continua vindo dos frames "speaking".
+        val requested = ui.modelEmotion ?: BmoFaceEmotion.fromCode(ui.faceExpression)
+        if (requested != null) {
+            if (ui.faceState == BmoState.SPEAKING && ui.audioPlaying) return "speaking"
+            return expressionKeyFor(requested)
         }
         return when (ui.faceState) {
             // Boca só se mexe quando há som saindo do alto-falante.

@@ -1,5 +1,7 @@
 package com.spacexjr.saturnbmo
 
+import com.spacexjr.saturnbmo.ui.face.BmoFaceEmotion
+
 /** Configuração persistida no aparelho. O token é guardado cifrado. */
 data class AppSettings(
     val host: String = "",
@@ -205,6 +207,8 @@ data class BmoUiState(
     val music: MusicInfo? = null,
     val pendingConfirmation: ConfirmationInfo? = null,
     val folderStatus: FolderStatus? = null,
+    /** Emoção escolhida pelo modelo via change_face; vale até o próximo turno. */
+    val modelEmotion: BmoFaceEmotion? = null,
 ) {
     val connected: Boolean get() = connection == ConnectionState.CONNECTED
     val musicActive: Boolean get() = music?.active == true

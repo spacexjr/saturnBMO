@@ -146,6 +146,7 @@ fun BmoFace(
         ui.music,
         ui.activity,
         ui.vadSpeaking,
+        ui.modelEmotion,
         sleeping,
     ) {
         BmoFaceController.visualFor(ui, sleeping)
@@ -160,10 +161,14 @@ fun BmoFace(
         ui.music,
         ui.activity,
         ui.vadSpeaking,
+        ui.modelEmotion,
         sleeping,
     ) {
         visual = derived
         if (sleeping) return@LaunchedEffect
+        // Emoção escolhida pelo modelo (change_face) não pode ser trocada por
+        // neutro no repouso; ela vale até o próximo turno.
+        if (ui.modelEmotion != null) return@LaunchedEffect
         when (ui.faceState) {
             BmoState.THINKING, BmoState.SPEAKING, BmoState.LISTENING, BmoState.ERROR -> Unit
             BmoState.IDLE -> if (derived.theme != BmoFaceTheme.NONE && !ui.musicActive) {
