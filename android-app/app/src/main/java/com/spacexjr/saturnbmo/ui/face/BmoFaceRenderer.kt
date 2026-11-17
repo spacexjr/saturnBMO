@@ -134,14 +134,17 @@ fun BmoFaceRenderer(
                 drawEyelids(faceRect, 1f)
             }
 
+            // O retângulo da cor do rosto apaga a boca original do PNG; a boca
+            // animada é desenhada depois dos efeitos para não parecer dupla.
+            if (visual.talking) {
+                drawMouthClear(faceRect)
+            }
             drawTheme(visual.theme, time, faceRect, particles, micLevel, cloudArt)
             drawActivity(visual.activity, time, faceRect, micLevel)
             drawEmotion(visual.emotion, visual.theme, time, faceRect, particles)
             if (visual.theme.category == BmoFaceCategory.MUSIC) {
                 drawHeadphones(faceRect)
             }
-            // Boca procedural por cima de qualquer expressão: o BMO continua
-            // "falando" mesmo quando a face é alegre, triste, surpresa etc.
             if (visual.talking) {
                 drawTalkingMouth(faceRect, time)
             }
@@ -1468,15 +1471,27 @@ private fun DrawScope.drawHeadphones(faceRect: Rect) {
     }
 }
 
+/** Apaga a boca original do PNG para ela não aparecer junto com a animada. */
+private fun DrawScope.drawMouthClear(faceRect: Rect) {
+    val w = faceRect.width
+    val h = faceRect.height
+    drawRect(
+        color = BmoGreen,
+        topLeft = Offset(faceRect.left + w * 0.35f, faceRect.top + h * 0.51f),
+        size = Size(w * 0.30f, h * 0.31f),
+    )
+}
+
 private fun DrawScope.drawTalkingMouth(faceRect: Rect, time: Long) {
     val w = faceRect.width
     val h = faceRect.height
+    val cx = faceRect.left + w * 0.5f
+    val cy = faceRect.top + h * 0.645f
+
     // Abre e fecha em ritmo de fala (≈3,7 Hz), sem chegar a fechar por completo.
     val openness = 0.30f + 0.70f * ((sin(time / 85f) + 1f) / 2f)
     val mouthW = w * 0.21f
     val mouthH = h * (0.055f + 0.165f * openness)
-    val cx = faceRect.left + w * 0.5f
-    val cy = faceRect.top + h * 0.645f
     val topLeft = Offset(cx - mouthW / 2f, cy - mouthH / 2f)
     val inset = w * 0.009f
 
@@ -1492,10 +1507,11 @@ private fun DrawScope.drawTalkingMouth(faceRect: Rect, time: Long) {
         size = Size(mouthW - inset * 2f, mouthH - inset * 2f),
         cornerRadius = CornerRadius(mouthW * 0.27f, mouthH * 0.28f),
     )
+    // Lábio inferior claro, pequeno e totalmente dentro da boca.
     drawOval(
         color = MouthLip,
-        topLeft = Offset(cx - mouthW * 0.31f, cy + mouthH * 0.10f),
-        size = Size(mouthW * 0.62f, mouthH * 0.34f),
+        topLeft = Offset(cx - mouthW * 0.26f, topLeft.y + mouthH * 0.56f),
+        size = Size(mouthW * 0.52f, mouthH * 0.24f),
     )
 }
 
