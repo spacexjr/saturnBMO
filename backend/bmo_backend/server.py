@@ -67,6 +67,26 @@ from .web import WebService
 
 log = logging.getLogger("bmo.server")
 
+# Nomes curtos que apareciam como "fala" quando o Whisper recebia um vocabulário
+# como prompt. Servem só para descartar ruído, nunca como pergunta.
+_NOISE_TRANSCRIPTS = {
+    "saturnbmo", "saturn bmo", "bmo", "kde", "ollama", "mopidy", "faster whisper",
+    "nobara", "fedora", "linux", "discord", "firefox", "steam", "youtube music",
+    "youtube", "whisper", "piper", "pipewire",
+}
+
+
+def _is_noise_transcript(text: str) -> bool:
+    """True quando a transcrição é só um nome/ruído de fundo conhecido."""
+    plain = normalize_text(text)
+    if not plain:
+        return True
+    if plain in _NOISE_TRANSCRIPTS:
+        return True
+    tokens = plain.split()
+    return 0 < len(tokens) <= 2 and all(token in _NOISE_TRANSCRIPTS for token in tokens)
+
+
 # Respostas aceitas para confirmar ou cancelar uma exclusão pendente.
 _AFFIRMATIVE = re.compile(
     r"^(sim|sim confirmo|confirmo|confirmado|pode|pode excluir|pode apagar|"
@@ -627,6 +647,10 @@ class BmoSession:
         self.state = "idle"
         self.capture_active = False
         self.bypass_wake_once = False
+        # Janela curta em que a pergunta pode ser aceita sem repetir a palavra
+        # de ativação. Sem prazo, uma detecção falsa deixava o assistente
+        # "aberto" e toda fala seguinte virava comando.
+        self._bypass_until = 0.0
         self.location: tuple[float, float] | None = None
         self.seq = 0
         self.generation = 0
@@ -819,6 +843,7 @@ class BmoSession:
                 )
         elif msg_type == "activate":
             self.bypass_wake_once = True
+            self._bypass_until = time.monotonic() + 15.0
             self._ignore_audio_until = 0.0
             self.vad.reset()
             self._reset_acoustic()
@@ -933,13 +958,18 @@ class BmoSession:
             with contextlib.suppress(Exception):
                 detector.reset()
 
+    def _bypass_active(self) -> bool:
+        """True enquanto a janela curta pós-ativação ainda está aberta."""
+        return self.bypass_wake_once and time.monotonic() < self._bypass_until
+
     async def _on_acoustic_detection(self, detection: Any) -> None:
         """Ativação pelo classificador acústico (independente do LLM/STT)."""
         if self.state in {"thinking", "speaking"}:
             return
-        if self.bypass_wake_once:
+        if self._bypass_active():
             return
         self.bypass_wake_once = True
+        self._bypass_until = time.monotonic() + 8.0
         log.info(
             "Sessão %s: wake word acústica detectada (score=%.3f).",
             self.session_id,
@@ -1009,13 +1039,26 @@ class BmoSession:
 
         wake_enabled = bool(self.config["wakeword"]["enabled"])
         wake_mode = self.services.wake_mode
+        bypass = self._bypass_active()
+        if not bypass:
+            self.bypass_wake_once = False
         transcript_required = (
-            wake_enabled and wake_mode in {"transcript", "hybrid"} and not self.bypass_wake_once
+            wake_enabled and wake_mode in {"transcript", "hybrid"} and not bypass
         )
         acoustic_only = (
-            wake_enabled and wake_mode == "acoustic" and not self.bypass_wake_once
+            wake_enabled and wake_mode == "acoustic" and not bypass
         )
         match = self.services.wake.detect(text) if wake_enabled else None
+
+        # Ruído de fundo transcrito como um nome isolado (o antigo vocabulário
+        # do Whisper favorecia "SaturnBMO", "KDE", "Ollama" e "Mopidy") não é
+        # uma pergunta: descarta sem acordar o modelo.
+        if _is_noise_transcript(text) and not (match and match.detected):
+            log.info("Sessão %s: transcrição de ruído ignorada: %r", self.session_id, text)
+            await self.event("wakeword.not_detected", reason="noise", transcript=text,
+                             message="Não ouvi uma pergunta.")
+            await self.set_state(self.resting_state(), "Aguardando 'Ei, BMO'.")
+            return
 
         if acoustic_only:
             # No modo acústico puro não há fallback por transcrição.
@@ -1045,6 +1088,7 @@ class BmoSession:
             )
             if not match.remaining_text:
                 self.bypass_wake_once = True
+                self._bypass_until = time.monotonic() + 8.0
                 await self.event("assistant.text.delta", text="Pode falar!", id="wake-ack")
                 await self.event("assistant.text.done", text="Pode falar!", id="wake-ack",
                                  audio_available=False)
@@ -1056,6 +1100,7 @@ class BmoSession:
             # remova-a para o LLM receber apenas a pergunta.
             text = match.remaining_text
         self.bypass_wake_once = False
+        self._bypass_until = 0.0
         log.info("Sessão %s: pergunta recebida (%d caracteres).", self.session_id, len(text))
         await self.event("request.accepted", text=text)
         await self.start_response(text)

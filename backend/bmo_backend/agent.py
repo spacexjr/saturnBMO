@@ -12,6 +12,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Awaitable, Callable
 
 import httpx
@@ -25,6 +26,30 @@ from .toolcalls import (
 from .toolkit import PendingConfirmation, ToolRegistry, result_text
 
 log = logging.getLogger("bmo.agent")
+
+_DIAS_SEMANA = (
+    "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira",
+    "sexta-feira", "sábado", "domingo",
+)
+_MESES = (
+    "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+    "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+)
+
+
+def _agora_texto() -> str:
+    """Data/hora local em português, para ancorar o modelo no presente."""
+    agora = datetime.now().astimezone()
+    dia = _DIAS_SEMANA[agora.weekday()]
+    mes = _MESES[agora.month - 1]
+    fuso = agora.tzname() or "local"
+    return (
+        f"Agora é {dia}, {agora.day} de {mes} de {agora.year}, "
+        f"{agora.hour:02d}:{agora.minute:02d} ({fuso}). "
+        "Use esta data e hora como verdade para qualquer pergunta temporal; "
+        "não invente outra data."
+    )
+
 
 _INTERNAL_ECHO = re.compile(
     r"(já foi executada|chamada repetida|use o resultado anterior|"
@@ -108,7 +133,8 @@ class ToolAgent:
 
     def _messages(self, user_text: str) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": self.system_prompt}
+            {"role": "system", "content": self.system_prompt},
+            {"role": "system", "content": _agora_texto()},
         ]
         messages.extend(self.history[-self.history_messages :])
         messages.append({"role": "user", "content": user_text})

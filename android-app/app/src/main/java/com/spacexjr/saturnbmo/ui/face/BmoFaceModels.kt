@@ -116,6 +116,8 @@ data class BmoFaceVisual(
     val data: BmoFaceData = BmoFaceData(),
     val emotion: BmoFaceEmotion = BmoFaceEmotion.NEUTRAL,
     val activity: BmoActivity = BmoActivity.NONE,
+    /** Áudio da resposta saindo agora: o renderer anima a boca em qualquer face. */
+    val talking: Boolean = false,
 ) {
     val theme: BmoFaceTheme get() = data.theme
 }

@@ -23,9 +23,9 @@ class BmoFaceSleepTest {
     )
 
     @Test
-    fun dormeDezSegundosDepoisDaUltimaAtividade() {
-        assertFalse(BmoFaceController.shouldSleep(awake, 10_900L))
-        assertTrue(BmoFaceController.shouldSleep(awake, 11_000L))
+    fun dormeCincoSegundosDepoisDaUltimaAtividade() {
+        assertFalse(BmoFaceController.shouldSleep(awake, 5_900L))
+        assertTrue(BmoFaceController.shouldSleep(awake, 6_000L))
     }
 
     @Test
@@ -77,8 +77,8 @@ class BmoFaceSleepTest {
     @Test
     fun eventoNovoReiniciaAContagem() {
         val recent = awake.copy(lastActivityAtMs = 40_000L)
-        assertFalse(BmoFaceController.shouldSleep(recent, 45_000L))
-        assertTrue(BmoFaceController.shouldSleep(recent, 50_000L))
+        assertFalse(BmoFaceController.shouldSleep(recent, 44_000L))
+        assertTrue(BmoFaceController.shouldSleep(recent, 45_000L))
     }
 
     @Test
@@ -115,10 +115,12 @@ class BmoFaceSleepTest {
     fun bocaSoMexeQuandoOAudioEstaTocando() {
         val muted = awake.copy(faceState = BmoState.SPEAKING, audioPlaying = false)
         val mutedVisual = BmoFaceController.visualFor(muted)
+        assertFalse(mutedVisual.talking)
         assertEquals("thinking", BmoFaceController.expressionKeyFor(muted, mutedVisual))
 
         val loud = awake.copy(faceState = BmoState.SPEAKING, audioPlaying = true)
         val loudVisual = BmoFaceController.visualFor(loud)
+        assertTrue(loudVisual.talking)
         assertEquals("speaking", BmoFaceController.expressionKeyFor(loud, loudVisual))
     }
 
@@ -132,8 +134,9 @@ class BmoFaceSleepTest {
         )
         val visual = BmoFaceController.visualFor(happyAnswer)
         assertEquals(BmoFaceEmotion.HAPPY, visual.emotion)
-        // A boca continua vindo dos frames "speaking".
-        assertEquals("speaking", BmoFaceController.expressionKeyFor(happyAnswer, visual))
+        assertTrue(visual.talking)
+        // Mantém os olhos felizes; a boca animada é desenhada por cima.
+        assertEquals("happy", BmoFaceController.expressionKeyFor(happyAnswer, visual))
     }
 
     @Test
@@ -145,10 +148,13 @@ class BmoFaceSleepTest {
         )
         val visual = BmoFaceController.visualFor(ui)
         assertEquals(BmoFaceEmotion.HAPPY, visual.emotion)
-        assertEquals("speaking", BmoFaceController.expressionKeyFor(ui, visual))
+        assertTrue(visual.talking)
+        assertEquals("happy", BmoFaceController.expressionKeyFor(ui, visual))
 
         val silent = ui.copy(audioPlaying = false)
-        assertEquals("happy", BmoFaceController.expressionKeyFor(silent, BmoFaceController.visualFor(silent)))
+        val silentVisual = BmoFaceController.visualFor(silent)
+        assertFalse(silentVisual.talking)
+        assertEquals("happy", BmoFaceController.expressionKeyFor(silent, silentVisual))
     }
 
     @Test
@@ -177,6 +183,21 @@ class BmoFaceSleepTest {
         val visual = BmoFaceController.visualFor(music)
         assertEquals(BmoFaceTheme.EQUALIZER, visual.theme)
         assertFalse(BmoFaceController.shouldSleep(music, 600_000L))
+    }
+
+    @Test
+    fun musicaContinuaVisivelEnquantoOOuve() {
+        val listening = awake.copy(
+            faceState = BmoState.LISTENING,
+            vadSpeaking = true,
+            transcript = "me conta sobre astronomia",
+            music = playing(),
+        )
+        val visual = BmoFaceController.visualFor(listening)
+        assertEquals(BmoFaceTheme.EQUALIZER, visual.theme)
+        assertEquals("Song", visual.data.musicTitle)
+        assertEquals("Artist", visual.data.musicArtist)
+        assertFalse(BmoFaceController.shouldSleep(listening, 600_000L))
     }
 
     @Test

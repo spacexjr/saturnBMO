@@ -154,20 +154,26 @@ class BmoFaceClassifierTest {
         )
         assertEquals(BmoFaceTheme.RAINY, visual.theme)
         assertEquals(BmoFaceEmotion.SPEAKING, visual.emotion)
-        // A boca (frames "speaking") só entra quando o áudio está tocando.
+        val loud = BmoUiState(
+            transcript = "Está chovendo?",
+            assistantText = "Sim, há previsão de chuva.",
+            bmoState = BmoState.SPEAKING,
+            faceState = BmoState.SPEAKING,
+            audioPlaying = true,
+        )
+        val loudVisual = com.spacexjr.saturnbmo.ui.face.BmoFaceController.visualFor(loud)
+        assertEquals(BmoFaceTheme.RAINY, loudVisual.theme)
+        assertEquals(BmoFaceEmotion.SPEAKING, loudVisual.emotion)
+        // A boca só entra quando o áudio está tocando.
         assertEquals(
             "speaking",
-            com.spacexjr.saturnbmo.ui.face.BmoFaceController.expressionKeyFor(
-                BmoUiState(faceState = BmoState.SPEAKING, audioPlaying = true),
-                visual,
-            ),
+            com.spacexjr.saturnbmo.ui.face.BmoFaceController.expressionKeyFor(loud, loudVisual),
         )
+        val muted = loud.copy(audioPlaying = false)
+        val mutedVisual = com.spacexjr.saturnbmo.ui.face.BmoFaceController.visualFor(muted)
         assertEquals(
             "thinking",
-            com.spacexjr.saturnbmo.ui.face.BmoFaceController.expressionKeyFor(
-                BmoUiState(faceState = BmoState.SPEAKING, audioPlaying = false),
-                visual,
-            ),
+            com.spacexjr.saturnbmo.ui.face.BmoFaceController.expressionKeyFor(muted, mutedVisual),
         )
     }
 

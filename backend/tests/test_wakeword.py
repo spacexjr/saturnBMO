@@ -44,6 +44,26 @@ def test_does_not_detect_unrelated_speech():
     assert result.detected is False
 
 
+def test_nao_ativa_com_nomes_ou_no_meio_da_frase():
+    detector = WakeWordDetector(["ei bmo", "bmo"])
+    for text in (
+        "SaturnBMO",
+        "o KDE e o Ollama",
+        "mopidy",
+        "abre o saturnbmo",
+        "eu falei ei bmo agora",
+        "faster whisper",
+    ):
+        assert detector.detect(text).detected is False, text
+
+
+def test_ativa_apenas_no_comeco_da_fala():
+    detector = WakeWordDetector(["ei bmo", "bmo"])
+    result = detector.detect("Ei, BMO, que dia é hoje?")
+    assert result.detected is True
+    assert "que dia" in result.remaining_text
+
+
 def test_phrase_without_command():
     detector = WakeWordDetector(["ei bmo", "bmo"])
     result = detector.detect("Ei BMO")

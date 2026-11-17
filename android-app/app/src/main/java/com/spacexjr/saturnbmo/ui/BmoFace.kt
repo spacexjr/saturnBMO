@@ -132,7 +132,7 @@ fun BmoFace(
             delay(500L)
             if (BmoFaceController.shouldSleep(latestUi, android.os.SystemClock.elapsedRealtime())) {
                 sleeping = true
-                Log.i(FACE_TAG, "Dormindo após 10 s sem atividade.")
+                Log.i(FACE_TAG, "Dormindo após 5 s sem atividade.")
                 break
             }
         }
@@ -143,6 +143,7 @@ fun BmoFace(
         ui.assistantText,
         ui.faceState,
         ui.faceExpression,
+        ui.audioPlaying,
         ui.music,
         ui.activity,
         ui.vadSpeaking,
@@ -158,6 +159,7 @@ fun BmoFace(
         ui.assistantText,
         ui.faceState,
         ui.faceExpression,
+        ui.audioPlaying,
         ui.music,
         ui.activity,
         ui.vadSpeaking,
@@ -229,7 +231,8 @@ fun BmoFace(
     val clock = rememberBmoFaceClock(
         enabled = visual.theme != BmoFaceTheme.NONE ||
             visual.emotion != com.spacexjr.saturnbmo.ui.face.BmoFaceEmotion.NEUTRAL ||
-            visual.activity != com.spacexjr.saturnbmo.BmoActivity.NONE,
+            visual.activity != com.spacexjr.saturnbmo.BmoActivity.NONE ||
+            visual.talking,
     )
     val frame = frames.getOrNull(frameIndex % frames.size.coerceAtLeast(1))
 

@@ -11,7 +11,7 @@ import com.spacexjr.saturnbmo.BmoUiState
  */
 object BmoFaceController {
     /** Tempo sem nenhuma atividade em que o BMO continua acordado. */
-    const val SLEEP_AFTER_MS = 10_000L
+    const val SLEEP_AFTER_MS = 5_000L
 
     fun visualFor(ui: BmoUiState, sleeping: Boolean = false): BmoFaceVisual {
         if (sleeping) {
@@ -29,18 +29,16 @@ object BmoFaceController {
         )
         val music = ui.music
         if (music != null && music.active) {
-            val musicContext = data.theme == BmoFaceTheme.NONE ||
-                data.theme.category == BmoFaceCategory.MUSIC ||
-                ui.activity?.activity == BmoActivity.PLAYING_MUSIC
-            if (musicContext) {
-                data = data.copy(
-                    theme = if (music.isPlaying) BmoFaceTheme.EQUALIZER else BmoFaceTheme.MUSIC,
-                    musicTitle = music.title.takeIf { it.isNotBlank() },
-                    musicArtist = music.artist.takeIf { it.isNotBlank() },
-                    musicPlaying = music.isPlaying,
-                    musicVolume = music.volume,
-                )
-            }
+            // Música ativa manda no visual mesmo durante a conversa ou a escuta:
+            // o overlay com título, equalizador e fone não pode sumir quando o
+            // BMO está ouvindo a pergunta.
+            data = data.copy(
+                theme = if (music.isPlaying) BmoFaceTheme.EQUALIZER else BmoFaceTheme.MUSIC,
+                musicTitle = music.title.takeIf { it.isNotBlank() },
+                musicArtist = music.artist.takeIf { it.isNotBlank() },
+                musicPlaying = music.isPlaying,
+                musicVolume = music.volume,
+            )
         }
         val activity = ui.activity?.activity ?: BmoActivity.NONE
         // Emoção pedida explicitamente pelo modelo via `change_face`. Vale até
@@ -65,6 +63,9 @@ object BmoFaceController {
             data = data,
             emotion = emotion,
             activity = activity,
+            // A boca é desenhada pelo renderer em cima de qualquer expressão
+            // enquanto o áudio da resposta está tocando.
+            talking = ui.audioPlaying && ui.faceState == BmoState.SPEAKING,
         )
     }
 
@@ -165,16 +166,19 @@ object BmoFaceController {
             BmoState.ERROR -> return "error"
             else -> Unit
         }
-        // Uma expressão pedida pelo modelo vence ouvindo/pensando/repouso.
-        // Enquanto fala com áudio, a boca continua vindo dos frames "speaking".
-        val requested = ui.modelEmotion ?: BmoFaceEmotion.fromCode(ui.faceExpression)
-        if (requested != null) {
-            if (ui.faceState == BmoState.SPEAKING && ui.audioPlaying) return "speaking"
-            return expressionKeyFor(requested)
+        // Enquanto o áudio toca, a boca animada é desenhada pelo renderer. Se a
+        // emoção do momento for específica (alegria, surpresa, tristeza...),
+        // mantemos os olhos daquela face e só a boca se move.
+        if (visual.talking) {
+            val talkingKey = expressionKeyFor(visual.emotion)
+            return if (talkingKey == "idle" || talkingKey == "speaking") "speaking" else talkingKey
         }
+        // Uma expressão pedida pelo modelo vence ouvindo/pensando/repouso.
+        val requested = ui.modelEmotion ?: BmoFaceEmotion.fromCode(ui.faceExpression)
+        if (requested != null) return expressionKeyFor(requested)
         return when (ui.faceState) {
-            // Boca só se mexe quando há som saindo do alto-falante.
-            BmoState.SPEAKING -> if (ui.audioPlaying) "speaking" else "thinking"
+            // Sem áudio ainda não há boca se mexendo.
+            BmoState.SPEAKING -> "thinking"
             BmoState.THINKING -> "thinking"
             BmoState.LISTENING -> if (ui.vadSpeaking) "listening" else "idle"
             BmoState.IDLE -> expressionKeyFor(visual.emotion)

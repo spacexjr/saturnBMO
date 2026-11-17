@@ -20,6 +20,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -45,6 +46,7 @@ import androidx.compose.ui.unit.sp
 import com.spacexjr.saturnbmo.BmoActivity
 import com.spacexjr.saturnbmo.ui.BmoGreen
 import com.spacexjr.saturnbmo.ui.BmoInk
+import com.spacexjr.saturnbmo.ui.BmoInkSoft
 import com.spacexjr.saturnbmo.ui.BmoWhite
 import java.util.Locale
 import kotlin.math.PI
@@ -79,6 +81,8 @@ private val CraterGray = Color(0xFF90A4AE)
 private val HeartRed = Color(0xFFFF5A7A)
 private val AngryRed = Color(0xFFD32F2F)
 private val MagicCyan = Color(0xFF00E5FF)
+private val MouthDark = Color(0xFF0F4A44)
+private val MouthLip = Color(0xFFC8F7D8)
 
 @Composable
 fun BmoFaceRenderer(
@@ -133,6 +137,14 @@ fun BmoFaceRenderer(
             drawTheme(visual.theme, time, faceRect, particles, micLevel, cloudArt)
             drawActivity(visual.activity, time, faceRect, micLevel)
             drawEmotion(visual.emotion, visual.theme, time, faceRect, particles)
+            if (visual.theme.category == BmoFaceCategory.MUSIC) {
+                drawHeadphones(faceRect)
+            }
+            // Boca procedural por cima de qualquer expressão: o BMO continua
+            // "falando" mesmo quando a face é alegre, triste, surpresa etc.
+            if (visual.talking) {
+                drawTalkingMouth(faceRect, time)
+            }
         }
 
         FaceReadouts(visual, Modifier.fillMaxSize())
@@ -1412,6 +1424,79 @@ private fun DrawScope.drawListeningWaves(time: Long, faceRect: Rect) {
             )
         }
     }
+}
+
+private fun DrawScope.drawHeadphones(faceRect: Rect) {
+    val w = faceRect.width
+    val h = faceRect.height
+    val ink = BmoInk
+    val highlight = BmoInkSoft
+    val cupW = w * 0.095f
+    val cupH = h * 0.25f
+    val cy = faceRect.top + h * 0.44f
+    val leftX = faceRect.left + w * 0.145f
+    val rightX = faceRect.left + w * 0.855f
+
+    // Arco da tiara ligando as duas conchas, passando acima dos olhos.
+    val band = Path().apply {
+        moveTo(leftX, cy - cupH * 0.15f)
+        cubicTo(
+            faceRect.left + w * 0.06f, faceRect.top + h * 0.02f,
+            faceRect.left + w * 0.94f, faceRect.top + h * 0.02f,
+            rightX, cy - cupH * 0.15f,
+        )
+    }
+    drawPath(
+        band,
+        color = ink,
+        style = Stroke(width = w * 0.035f, cap = StrokeCap.Round),
+    )
+
+    listOf(leftX, rightX).forEach { cx ->
+        drawRoundRect(
+            color = ink,
+            topLeft = Offset(cx - cupW / 2f, cy - cupH / 2f),
+            size = Size(cupW, cupH),
+            cornerRadius = CornerRadius(cupW * 0.42f),
+        )
+        drawRoundRect(
+            color = highlight,
+            topLeft = Offset(cx - cupW * 0.2f, cy - cupH * 0.26f),
+            size = Size(cupW * 0.4f, cupH * 0.52f),
+            cornerRadius = CornerRadius(cupW * 0.2f),
+        )
+    }
+}
+
+private fun DrawScope.drawTalkingMouth(faceRect: Rect, time: Long) {
+    val w = faceRect.width
+    val h = faceRect.height
+    // Abre e fecha em ritmo de fala (≈3,7 Hz), sem chegar a fechar por completo.
+    val openness = 0.30f + 0.70f * ((sin(time / 85f) + 1f) / 2f)
+    val mouthW = w * 0.21f
+    val mouthH = h * (0.055f + 0.165f * openness)
+    val cx = faceRect.left + w * 0.5f
+    val cy = faceRect.top + h * 0.645f
+    val topLeft = Offset(cx - mouthW / 2f, cy - mouthH / 2f)
+    val inset = w * 0.009f
+
+    drawRoundRect(
+        color = BmoInk,
+        topLeft = topLeft,
+        size = Size(mouthW, mouthH),
+        cornerRadius = CornerRadius(mouthW * 0.32f, mouthH * 0.34f),
+    )
+    drawRoundRect(
+        color = MouthDark,
+        topLeft = Offset(topLeft.x + inset, topLeft.y + inset),
+        size = Size(mouthW - inset * 2f, mouthH - inset * 2f),
+        cornerRadius = CornerRadius(mouthW * 0.27f, mouthH * 0.28f),
+    )
+    drawOval(
+        color = MouthLip,
+        topLeft = Offset(cx - mouthW * 0.31f, cy + mouthH * 0.10f),
+        size = Size(mouthW * 0.62f, mouthH * 0.34f),
+    )
 }
 
 private fun DrawScope.drawEyelids(faceRect: Rect, closed: Float) {

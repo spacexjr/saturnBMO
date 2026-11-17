@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from bmo_backend.agent import AgentResult
 from bmo_backend.audio import pcm16_to_wav, split_wav
 from bmo_backend.config import DEFAULT_CONFIG, resolve_runtime_paths
-from bmo_backend.server import Services, create_app
+from bmo_backend.server import Services, _is_noise_transcript, create_app
 from bmo_backend.stt import SttResult
 from bmo_backend.toolkit import PendingConfirmation, ToolResult
 from bmo_backend.tts import TtsAudio
@@ -554,6 +554,13 @@ def test_websocket_audio_vad_wakeword_and_response(tmp_path):
 # ---------------------------------------------------------------------------
 # Wake word efetivo, pasta autorizada e confirmação de ferramentas
 # ---------------------------------------------------------------------------
+
+
+def test_noise_transcripts_never_become_commands():
+    for text in ("SaturnBMO", "KDE", "Ollama", "Mopidy", "Faster-Whisper", ""):
+        assert _is_noise_transcript(text) is True, text
+    for text in ("que horas são", "toca uma música", "ei bmo"):
+        assert _is_noise_transcript(text) is False, text
 
 
 def test_wake_mode_falls_back_without_acoustic_detector():

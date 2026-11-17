@@ -63,23 +63,11 @@ class FasterWhisperStt:
         self.condition_on_previous_text = bool(
             config.get("condition_on_previous_text", False)
         )
-        vocabulary = config.get("vocabulary")
-        if isinstance(vocabulary, (list, tuple)):
-            words = [str(item).strip() for item in vocabulary if str(item).strip()]
-            vocabulary_prompt = ", ".join(words)
-        else:
-            vocabulary_prompt = str(vocabulary or "").strip()
-        self.initial_prompt = str(config.get("initial_prompt") or vocabulary_prompt).strip()
-        self.hotwords = (
-            str(config.get("hotwords") or "").strip()
-            or str(config.get("vocabulary_hotwords") or "").strip()
-        )
-        if not self.hotwords and isinstance(vocabulary, (list, tuple)):
-            self.hotwords = " ".join(
-                str(item).strip() for item in vocabulary if str(item).strip()
-            )
-        if not self.hotwords:
-            self.hotwords = self.initial_prompt
+        # A lista `vocabulary` serve para documentação/UI: usá-la como hotwords
+        # ou initial_prompt faz o Whisper "ouvir" esses nomes em ruído
+        # (SaturnBMO, KDE, Ollama, Mopidy). Só prompts explícitos são enviados.
+        self.initial_prompt = str(config.get("initial_prompt") or "").strip()
+        self.hotwords = str(config.get("hotwords") or "").strip()
         self.timeout_s = float(config.get("timeout_s", 180))
         # Limita o número de threads do CTranslate2. Sem isto o modelo
         # "medium" ocupava todos os núcleos e travava o servidor em uma

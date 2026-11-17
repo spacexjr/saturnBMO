@@ -69,7 +69,10 @@ class WakeWordDetector:
             return WakeWordResult(True, text.strip(), None, normalized)
         for phrase, pattern in self._patterns:
             match = pattern.search(normalized)
-            if not match:
+            # A palavra de ativação precisa abrir a fala. Sem isto, qualquer
+            # ruído transcrito como "... BMO ..." ativava o assistente no meio
+            # de uma frase ou de um nome (SaturnBMO, por exemplo).
+            if not match or match.start() != 0:
                 continue
             # Remove a ocorrência da frase do texto original normalizado e
             # devolve o restante em minúsculas (sem acentos). O texto original

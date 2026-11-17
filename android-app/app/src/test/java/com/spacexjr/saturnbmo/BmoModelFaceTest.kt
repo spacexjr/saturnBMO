@@ -31,7 +31,7 @@ class BmoModelFaceTest {
     }
 
     @Test
-    fun duranteAFalaABocaVemDosFramesSemPerderAEmocao() {
+    fun duranteAFalaAMantemAEmocaoComBocaAnimada() {
         val ui = BmoUiState(
             faceState = BmoState.SPEAKING,
             modelEmotion = BmoFaceEmotion.CONFUSED,
@@ -39,12 +39,13 @@ class BmoModelFaceTest {
         )
         val visual = BmoFaceController.visualFor(ui)
         assertEquals(BmoFaceEmotion.CONFUSED, visual.emotion)
-        assertEquals("speaking", BmoFaceController.expressionKeyFor(ui, visual))
+        assertEquals(true, visual.talking)
+        assertEquals("confused", BmoFaceController.expressionKeyFor(ui, visual))
         // Terminado o áudio, a expressão escolhida continua na tela.
-        assertEquals(
-            "confused",
-            BmoFaceController.expressionKeyFor(ui.copy(audioPlaying = false), visual),
-        )
+        val silent = ui.copy(audioPlaying = false)
+        val silentVisual = BmoFaceController.visualFor(silent)
+        assertEquals(false, silentVisual.talking)
+        assertEquals("confused", BmoFaceController.expressionKeyFor(silent, silentVisual))
     }
 
     @Test
