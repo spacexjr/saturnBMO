@@ -1436,6 +1436,14 @@ class BmoEngine private constructor(context: Context) {
                 _ui.update {
                     it.copy(
                         vadSpeaking = speaking,
+                        // Voz detectada também reinicia o relógio do sono:
+                        // o BMO acorda na hora e só volta a dormir 5 s depois
+                        // que a fala termina.
+                        lastActivityAtMs = if (speaking) {
+                            SystemClock.elapsedRealtime()
+                        } else {
+                            it.lastActivityAtMs
+                        },
                         statusDetail = when {
                             speaking -> "Ouvindo sua fala..."
                             it.faceState == BmoState.THINKING -> "Processando..."

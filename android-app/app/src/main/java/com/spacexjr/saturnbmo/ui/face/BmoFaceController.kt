@@ -80,6 +80,8 @@ object BmoFaceController {
             else -> Unit
         }
         if (ui.audioPlaying || ui.streamingText) return false
+        // Qualquer voz detectada pelo VAD acorda o BMO e mantém os olhos abertos.
+        if (ui.vadSpeaking) return false
         if (ui.music?.isPlaying == true) return false
         if (ui.pendingConfirmation != null) return false
         if (ui.micTesting) return false

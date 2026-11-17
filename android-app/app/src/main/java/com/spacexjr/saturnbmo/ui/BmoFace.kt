@@ -111,10 +111,11 @@ fun BmoFace(
     // precisam bloquear o sono).
     val latestUi by rememberUpdatedState(ui)
 
-    // Dorme depois de 10 s sem nenhuma atividade; qualquer evento do servidor,
-    // música ou operação reinicia a contagem e acorda o BMO.
+    // Dorme depois de 5 s sem atividade; qualquer evento do servidor, voz
+    // detectada, música ou operação reinicia a contagem e acorda o BMO.
     LaunchedEffect(
         ui.lastActivityAtMs,
+        ui.vadSpeaking,
         ui.music?.isPlaying,
         ui.musicActive,
         ui.activity,

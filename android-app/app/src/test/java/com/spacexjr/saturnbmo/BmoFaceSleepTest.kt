@@ -45,8 +45,8 @@ class BmoFaceSleepTest {
         assertFalse(
             BmoFaceController.shouldSleep(awake.copy(audioPlaying = true), 60_000L)
         )
-        // VAD de ruído pode ficar preso em `true`; não pode impedir o sono.
-        assertTrue(
+        // Qualquer voz detectada pelo VAD acorda e mantém o rosto acordado.
+        assertFalse(
             BmoFaceController.shouldSleep(awake.copy(vadSpeaking = true), 60_000L)
         )
         assertFalse(
@@ -79,6 +79,17 @@ class BmoFaceSleepTest {
         val recent = awake.copy(lastActivityAtMs = 40_000L)
         assertFalse(BmoFaceController.shouldSleep(recent, 44_000L))
         assertTrue(BmoFaceController.shouldSleep(recent, 45_000L))
+    }
+
+    @Test
+    fun vozDetectadaAcordaEReiniciaAContagem() {
+        val falando = awake.copy(lastActivityAtMs = 1_000L, vadSpeaking = true)
+        assertFalse(BmoFaceController.shouldSleep(falando, 60_000L))
+
+        // Terminada a fala, o sono só volta 5 s depois do último trecho ouvido.
+        val terminou = falando.copy(vadSpeaking = false, lastActivityAtMs = 60_000L)
+        assertFalse(BmoFaceController.shouldSleep(terminou, 64_999L))
+        assertTrue(BmoFaceController.shouldSleep(terminou, 65_000L))
     }
 
     @Test
