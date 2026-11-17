@@ -46,7 +46,6 @@ import androidx.compose.ui.unit.sp
 import com.spacexjr.saturnbmo.BmoActivity
 import com.spacexjr.saturnbmo.ui.BmoGreen
 import com.spacexjr.saturnbmo.ui.BmoInk
-import com.spacexjr.saturnbmo.ui.BmoInkSoft
 import com.spacexjr.saturnbmo.ui.BmoWhite
 import java.util.Locale
 import kotlin.math.PI
@@ -82,7 +81,6 @@ private val HeartRed = Color(0xFFFF5A7A)
 private val AngryRed = Color(0xFFD32F2F)
 private val MagicCyan = Color(0xFF00E5FF)
 private val MouthDark = Color(0xFF0F4A44)
-private val MouthLip = Color(0xFFC8F7D8)
 
 @Composable
 fun BmoFaceRenderer(
@@ -1433,7 +1431,6 @@ private fun DrawScope.drawHeadphones(faceRect: Rect) {
     val w = faceRect.width
     val h = faceRect.height
     val ink = BmoInk
-    val highlight = BmoInkSoft
     val cupW = w * 0.095f
     val cupH = h * 0.25f
     val cy = faceRect.top + h * 0.44f
@@ -1460,13 +1457,7 @@ private fun DrawScope.drawHeadphones(faceRect: Rect) {
             color = ink,
             topLeft = Offset(cx - cupW / 2f, cy - cupH / 2f),
             size = Size(cupW, cupH),
-            cornerRadius = CornerRadius(cupW * 0.42f),
-        )
-        drawRoundRect(
-            color = highlight,
-            topLeft = Offset(cx - cupW * 0.2f, cy - cupH * 0.26f),
-            size = Size(cupW * 0.4f, cupH * 0.52f),
-            cornerRadius = CornerRadius(cupW * 0.2f),
+            cornerRadius = CornerRadius(cupW * 0.32f),
         )
     }
 }
@@ -1499,19 +1490,13 @@ private fun DrawScope.drawTalkingMouth(faceRect: Rect, time: Long) {
         color = BmoInk,
         topLeft = topLeft,
         size = Size(mouthW, mouthH),
-        cornerRadius = CornerRadius(mouthW * 0.32f, mouthH * 0.34f),
+        cornerRadius = CornerRadius(mouthW * 0.22f, mouthH * 0.22f),
     )
     drawRoundRect(
         color = MouthDark,
         topLeft = Offset(topLeft.x + inset, topLeft.y + inset),
         size = Size(mouthW - inset * 2f, mouthH - inset * 2f),
-        cornerRadius = CornerRadius(mouthW * 0.27f, mouthH * 0.28f),
-    )
-    // Lábio inferior claro, pequeno e totalmente dentro da boca.
-    drawOval(
-        color = MouthLip,
-        topLeft = Offset(cx - mouthW * 0.26f, topLeft.y + mouthH * 0.56f),
-        size = Size(mouthW * 0.52f, mouthH * 0.24f),
+        cornerRadius = CornerRadius(mouthW * 0.18f, mouthH * 0.18f),
     )
 }
 
