@@ -1,8 +1,9 @@
 """Reconhecimento de fala local.
 
-O mecanismo principal é o **Faster-Whisper** executado no PC. O
-``whisper.cpp`` permanece disponível como alternativa compatível, mas não é
-usado no Android em nenhuma hipótese.
+O mecanismo principal é o **Qwen3-ASR** executado localmente pelo Ollama no
+PC (ver :mod:`bmo_backend.qwen_asr`). O Faster-Whisper e o ``whisper.cpp``
+continuam disponíveis apenas como alternativas opcionais; nada é executado no
+Android.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import logging
 import os
 import re
 import tempfile
+import time
 import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -39,6 +41,10 @@ class SttResult:
     text: str
     language: str
     duration_ms: int
+    # Tempo real gasto na inferência (não o tamanho do áudio).
+    latency_ms: int = 0
+    # Nome do mecanismo que de fato transcreveu (útil quando há fallback).
+    engine: str = ""
 
 
 class FasterWhisperStt:
@@ -150,6 +156,7 @@ class FasterWhisperStt:
         if not self.available():
             return await _transcribe_or_fail(self, pcm, sample_rate)
         duration_ms = int(len(pcm) / 2 / sample_rate * 1000)
+        started = time.monotonic()
         async with self._lock:
             if self._pending is not None and not self._pending.done():
                 raise SttError(
@@ -176,7 +183,13 @@ class FasterWhisperStt:
                 raise
             except Exception as exc:  # noqa: BLE001
                 raise SttError(f"Faster-Whisper falhou: {exc}") from exc
-        return SttResult(text=text, language=language, duration_ms=duration_ms)
+        return SttResult(
+            text=text,
+            language=language,
+            duration_ms=duration_ms,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            engine="faster-whisper",
+        )
 
     def _transcribe_sync(self, pcm: bytes, sample_rate: int) -> tuple[str, str]:
         import numpy as np
@@ -242,6 +255,7 @@ class WhisperCppStt:
             raise SttError("Áudio vazio.")
         wav_bytes = pcm16_to_wav(pcm, sample_rate=sample_rate)
         duration_ms = int(len(pcm) / 2 / sample_rate * 1000)
+        started = time.monotonic()
 
         async with self._lock:
             with tempfile.TemporaryDirectory(prefix="bmo-stt-") as tmp:
@@ -288,19 +302,35 @@ class WhisperCppStt:
                 text_file = out_prefix.with_suffix(".txt")
                 text = text_file.read_text(encoding="utf-8", errors="ignore") if text_file.exists() else ""
                 text = drop_hallucination(clean_transcript(text))
-                return SttResult(text=text, language=self.language, duration_ms=duration_ms)
+                return SttResult(
+                    text=text,
+                    language=self.language,
+                    duration_ms=duration_ms,
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                    engine="whisper.cpp",
+                )
 
     async def close(self) -> None:
         return None
 
 
 class FallbackStt:
-    """Fachada que tenta o Faster-Whisper e cai para o whisper.cpp."""
+    """Fachada que tenta o mecanismo principal e, se falhar, o opcional."""
 
     def __init__(self, primary: Any, fallback: Any) -> None:
         self.primary = primary
         self.fallback = fallback
         self.last_engine = ""
+
+    @staticmethod
+    def _engine_name(item: Any, default: str = "") -> str:
+        if item is None:
+            return default
+        try:
+            status = item.status()
+        except Exception:  # noqa: BLE001
+            status = {}
+        return str(status.get("engine") or default)
 
     def available(self) -> bool:
         return bool(
@@ -312,7 +342,7 @@ class FallbackStt:
         data = (
             self.primary.status()
             if self.primary is not None
-            else {"engine": "faster-whisper", "available": False}
+            else {"engine": "desconhecido", "available": False}
         )
         data["fallback"] = (
             self.fallback.status() if self.fallback is not None else None
@@ -321,21 +351,30 @@ class FallbackStt:
         data["active_engine"] = self.last_engine or data.get("engine")
         return data
 
+    async def refresh_availability(self, force: bool = False) -> bool:
+        """Atualiza o estado do principal e do fallback, sem derrubar o outro."""
+        for item in (self.primary, self.fallback):
+            refresh = getattr(item, "refresh_availability", None)
+            if refresh is not None:
+                with contextlib.suppress(Exception):
+                    await refresh(force=force)
+        return self.available()
+
     async def transcribe(self, pcm: bytes, sample_rate: int = 16000) -> SttResult:
         errors: list[str] = []
         if self.primary is not None and self.primary.available():
             try:
                 result = await self.primary.transcribe(pcm, sample_rate)
-                self.last_engine = "faster-whisper"
+                self.last_engine = result.engine or self._engine_name(self.primary)
                 return result
             except SttUnavailable as exc:
                 errors.append(str(exc))
             except SttError as exc:
-                log.warning("Faster-Whisper falhou; tentando fallback: %s", exc)
+                log.warning("STT principal falhou; tentando fallback: %s", exc)
                 errors.append(str(exc))
         if self.fallback is not None and self.fallback.available():
             result = await self.fallback.transcribe(pcm, sample_rate)
-            self.last_engine = "whisper.cpp"
+            self.last_engine = result.engine or self._engine_name(self.fallback)
             return result
         raise SttUnavailable(" ".join(errors) or "Nenhum mecanismo de STT disponível.")
 
@@ -345,17 +384,48 @@ class FallbackStt:
                 await item.close()
 
 
-def build_stt(config: dict[str, Any]) -> Any:
-    """Cria o STT conforme a configuração, mantendo fallback seguro."""
-    engine = str(config.get("engine", "faster_whisper")).lower()
-    fallback_cfg = config.get("fallback") or {}
+_QWEN_ENGINES = {"qwen3_asr", "qwen3-asr", "qwen_asr", "qwen-asr", "qwen"}
+
+
+def _build_single_stt(config: dict[str, Any]) -> Any:
+    engine = str(config.get("engine", "qwen3_asr")).strip().lower().replace("-", "_")
+    if engine in _QWEN_ENGINES:
+        # Import tardio: qwen_asr importa SttResult/SttError deste módulo.
+        from .qwen_asr import QwenAsrStt
+
+        return QwenAsrStt(config)
     if engine == "whisper_cpp":
         return WhisperCppStt(config)
     if engine == "faster_whisper":
-        primary = FasterWhisperStt(config)
-        fallback = WhisperCppStt(fallback_cfg) if fallback_cfg.get("binary") else None
-        return FallbackStt(primary, fallback)
+        return FasterWhisperStt(config)
     raise ValueError(f"Mecanismo de STT desconhecido: {engine}")
+
+
+def build_stt(config: dict[str, Any]) -> Any:
+    """Cria o STT conforme a configuração, mantendo fallback opcional.
+
+    O fallback só é instanciado quando ``fallback.enabled`` é verdadeiro.
+    Assim, uma falha do Qwen3-ASR é reportada de forma honesta em vez de ser
+    escondida por um mecanismo diferente sem o usuário saber.
+    """
+    primary = _build_single_stt(config)
+    fallback_cfg = config.get("fallback") or {}
+    enabled = fallback_cfg.get("enabled")
+    if enabled is None:
+        # Compatibilidade com configurações antigas: se o fallback tinha um
+        # engine explícito e nenhum "enabled", ele continua valendo.
+        enabled = bool(fallback_cfg.get("engine"))
+    if not enabled:
+        return primary
+    fallback_config = dict(fallback_cfg)
+    fallback_config.setdefault("engine", "faster_whisper")
+    fallback_config["enabled"] = True
+    try:
+        fallback = _build_single_stt(fallback_config)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Fallback de STT inválido (%s); seguindo sem fallback.", exc)
+        return primary
+    return FallbackStt(primary, fallback)
 
 
 async def _transcribe_or_fail(stt: FasterWhisperStt, pcm: bytes, sample_rate: int) -> SttResult:

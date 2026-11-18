@@ -115,10 +115,10 @@ Todos têm `type`, `seq` e `ts`, salvo indicação em contrário.
 | `hello.ok` | `protocol`, `session_id` | Resposta ao `hello` do cliente. |
 | `location.ok` | `latitude`, `longitude` | Coordenadas aceitas e guardadas na sessão. |
 | `pong` | `echo?`, `server_ts` | Resposta ao `ping`. |
-| `state` | `state`, `detail` | Estado global: `idle`, `listening`, `thinking`, `speaking`, `error`. |
+| `state` | `state`, `detail` | Estado global: `idle`, `listening`, `wakeword_detected`, `transcribing`, `thinking`, `speaking`, `error`. |
 | `audio.ready` | `format`, `sample_rate`, `channels` | Servidor pronto para receber áudio. |
 | `vad` | `speaking` | Início/fim de fala detectado. |
-| `transcript` | `text`, `final`, `source`, `duration_ms?` | Transcrição do áudio ou texto do usuário. |
+| `transcript` | `text`, `final`, `source`, `duration_ms?`, `latency_ms?`, `engine?` | Transcrição do áudio ou texto do usuário. `engine` identifica o ASR real (por exemplo `qwen3-asr`). |
 | `wakeword.detected` | `phrase`, `transcript?`, `source`, `score?` | Palavra de ativação encontrada (`source`: `acoustic` ou `transcript`). |
 | `wakeword.activated` | `manual`, `message` | Ativação manual aceita. |
 | `wakeword.not_detected` | `reason?`, `message`, `transcript?` | Fala transcrita sem a palavra de ativação. |
@@ -211,7 +211,7 @@ O backend só envia `face` quando o modelo (ou um pedido explícito) escolhe uma
 O modo padrão é `hybrid`:
 
 - o classificador acústico ONNX (`wakeword/saturnbmo.onnx`) analisa o áudio de entrada;
-- a transcrição do Faster-Whisper também é comparada com as frases de `wakeword.phrases`;
+- a transcrição do Qwen3-ASR também é comparada com as frases de `wakeword.phrases`;
 - o texto é normalizado (minúsculas, sem acentos/pontuação).
 
 Quando a ativação vem da transcrição e há texto restante, o restante vira o pedido. Se a frase vier sozinha, o servidor responde “Pode falar!” e mantém a escuta. Sem correspondência, envia `wakeword.not_detected` e volta ao repouso. A ativação manual (`activate`) ignora a palavra de ativação uma vez.
@@ -367,7 +367,7 @@ O app usa broadcast para achar o PC, mas o token continua obrigatório.
 | `confirmation_invalid` | Nenhuma confirmação pendente com o `id` informado. |
 | `invalid_folder` / `empty_path` | Caminho de pasta inválido ou vazio. |
 | `picker_error` | Seletor nativo indisponível, sem sessão gráfica ou falhou. |
-| `stt_unavailable` / `stt_error` | Faster-Whisper (ou fallback whisper.cpp) indisponível ou falhou. |
+| `stt_unavailable` / `stt_error` | Qwen3-ASR/Ollama (ou fallback opcional) indisponível ou falhou. |
 | `llm_unavailable` / `llm_error` | Ollama indisponível ou falhou. |
 | `tts_error` | Piper/espeak-ng falhou. |
 | `weather_error` / `weather_unavailable` | Clima falhou ou GPS não foi autorizado/enviado. |

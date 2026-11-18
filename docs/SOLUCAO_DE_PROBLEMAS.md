@@ -165,20 +165,29 @@ curl http://127.0.0.1:11434/api/tags
 
 ## O STT não funciona
 
-O motor principal é o **Faster-Whisper**, instalado no `backend/.venv`.
+O motor principal é o **Qwen3-ASR 0.6B**, executado pelo Ollama no PC.
 
 ```bash
-cd backend
-.venv/bin/python -c "import faster_whisper; print(faster_whisper.__version__)"
+ollama list
+ollama ps
+curl -s http://127.0.0.1:11434/api/tags
+ollama pull frozenlab/qwen3-asr:0.6b
 ```
 
-- Confira no app se STT aparece `ok` em **Ajustes → Estado do servidor**.
-- O modelo (`medium` por padrão) é baixado no primeiro uso; aguarde a conclusão.
-- Se o download falhar, veja a conexão do PC ou ajuste `stt.model` para um modelo já baixado.
-- Em CPU, use `compute_type: int8`. `float16` pode falhar sem GPU compatível.
-- Verifique o log em `backend/data/bmo-backend.log`.
-- Se o log mostrar `Carregando Faster-Whisper ../tools/whisper-models/ggml-base.bin`, há um `BMO_STT_MODEL` antigo em `backend/.env` sobrescrevendo o `config.json` (o `run.sh` carrega esse arquivo). Deixe `BMO_STT_MODEL=` em branco ou use `medium`/`small`.
-- Para testar o fallback whisper.cpp, confira `tools/whisper.cpp/build/bin/whisper-cli` e `tools/whisper-models/ggml-base.bin`. Ele é opcional; sem esses arquivos, o Faster-Whisper continua funcionando.
+- Confira no app se STT aparece `ok` em **Ajustes → Estado do servidor**. O app mostra também o motor e o modelo de ASR.
+- Se o Ollama estiver parado, o backend responde `stt_unavailable`. Inicie com `ollama serve` ou `systemctl --user start ollama`.
+- Teste a transcrição real com áudio gerado pelo Piper local:
+
+  ```bash
+  backend/.venv/bin/python scripts/check_asr.py --text "Ei BMO, que horas são?"
+  ```
+
+- Se o script disser que o modelo não foi encontrado, rode `ollama pull frozenlab/qwen3-asr:0.6b`.
+- Se a transcrição vier vazia, verifique microfone, ruído e `stt.max_audio_s`.
+- Se a primeira resposta demorar, é o carregamento do modelo; `stt.keep_alive` evita recarregar a cada fala.
+- Verifique `last_error` em `GET /api/v1/info` e o log em `backend/data/bmo-backend.log`.
+- Variáveis antigas `BMO_STT_*` em `backend/.env` ainda são aceitas; prefira `BMO_ASR_*` para evitar confusão.
+- O fallback Faster-Whisper/whisper.cpp só roda se `stt.fallback.enabled` for `true`. Ele não é necessário para o funcionamento normal.
 
 ## A música não toca, não atualiza ou não despausa
 

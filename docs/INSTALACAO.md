@@ -8,8 +8,8 @@ Você precisa de:
 
 1. PC e celular na mesma rede local (Wi-Fi ou Ethernet).
 2. Backend Python rodando no PC.
-3. Ollama com um modelo local.
-4. Faster-Whisper (instalado pelo `requirements.txt`; modelo baixado no primeiro uso).
+3. Ollama com um modelo de conversa local e o modelo de fala `frozenlab/qwen3-asr:0.6b`.
+4. Faster-Whisper (opcional; só é usado se o fallback for ativado).
 5. Piper com voz pt-BR **ou** espeak-ng como fallback.
 6. Mopidy 4 para tocar YouTube Music; `playerctl`/`busctl` para MPRIS/BitChord (alternativa) e `kdialog`/`zenity` para o seletor de pastas.
 7. APK instalado no celular.
@@ -65,7 +65,8 @@ O script:
 - cria `backend/data/token` se ainda não existir;
 - configura `backend/.env` com as portas, Mopidy e YouTube Music;
 - gera e valida `backend/data/mopidy/mopidy.conf` restrito a `127.0.0.1`;
-- verifica Piper, Faster-Whisper, espeak-ng, GStreamer, playerctl, kdialog/zenity e Ollama;
+- verifica Piper, espeak-ng, GStreamer, playerctl, kdialog/zenity e Ollama;
+- verifica se o modelo de fala do Qwen3-ASR está disponível no Ollama;
 - lista o que estiver faltando.
 
 Depois, para subir Mopidy e o backend juntos:
@@ -84,16 +85,22 @@ python3 -m venv .venv
 .venv/bin/python -m bmo_backend --print-token
 ```
 
-As dependências principais incluem `faster-whisper`, `onnxruntime`, `numpy`, `httpx`, `fastapi` e `uvicorn`.
+As dependências principais incluem `onnxruntime`, `numpy`, `httpx`, `fastapi` e `uvicorn`. `faster-whisper` continua instalado para o fallback opcional.
 
-## 4. Ollama e modelo de linguagem
+## 4. Ollama, modelo de linguagem e ASR
 
-Instale o Ollama pelo site oficial e baixe um modelo. O padrão do repositório é:
+Instale o Ollama pelo site oficial e baixe os dois modelos. O padrão do repositório é:
 
 ```bash
+ollama serve
 ollama pull qwen3:8b
+ollama pull frozenlab/qwen3-asr:0.6b
 ollama list
 ```
+
+O `qwen3:8b` é usado para conversa e ferramentas. O `frozenlab/qwen3-asr:0.6b`
+é usado para transcrever a fala. Sem o modelo de fala, o backend informa que o
+STT está indisponível em vez de inventar texto.
 
 O Ollama deve escutar em `127.0.0.1:11434` (padrão). Para usar outro modelo, edite `backend/config.json`:
 
@@ -111,40 +118,62 @@ export BMO_LLM_MODEL=outro-modelo
 
 Se o modelo padrão não existir no seu PC, escolha um de `ollama list`; caso contrário o backend responde que o LLM está indisponível. Modelos menores respondem mais rápido, mas erram mais.
 
-## 5. Faster-Whisper (STT principal)
+## 5. Qwen3-ASR (STT principal)
 
-O Faster-Whisper é instalado por `backend/requirements.txt`. O modelo é baixado/carregado na primeira transcrição. Configuração padrão:
+O Qwen3-ASR roda dentro do Ollama e é o mecanismo principal. Configuração
+padrão em `backend/config.json`:
 
 ```json
 "stt": {
-  "engine": "faster_whisper",
-  "model": "medium",
-  "device": "cpu",
-  "compute_type": "int8",
-  "language": "pt",
-  "beam_size": 5,
-  "num_workers": 1,
-  "vad_filter": true
+  "engine": "qwen3_asr",
+  "model": "frozenlab/qwen3-asr:0.6b",
+  "base_url": "http://127.0.0.1:11434",
+  "language": "pt-BR",
+  "timeout_s": 60,
+  "max_audio_s": 55,
+  "keep_alive": "10m",
+  "num_predict": 256,
+  "fallback": {
+    "enabled": false,
+    "engine": "faster_whisper",
+    "model": "small"
+  }
 }
 ```
 
-- `model`: `tiny`, `base`, `small`, `medium`, `large-v3` etc.
-- `compute_type`: `int8` é o mais leve em CPU; `float16` exige GPU compatível.
-- `beam_size`: maior tende a melhorar a precisão e aumentar a latência.
-- `language`: `pt` para português.
+- `model`: nome exato retornado por `ollama list`.
+- `base_url`: endereço do Ollama; mantenha em `127.0.0.1`.
+- `language`: `pt-BR` para priorizar português.
+- `timeout_s`: tempo máximo da transcrição.
+- `max_audio_s`: duração máxima enviada ao modelo.
+- `keep_alive`: mantém o modelo carregado entre falas.
 
-Se o modelo não baixar, verifique a conexão do PC ou baixe manualmente um modelo do projeto Faster-Whisper/Systran e ajuste o caminho em `stt.model`.
+Teste real:
 
-### Fallback whisper.cpp (opcional)
+```bash
+backend/.venv/bin/python scripts/check_asr.py --text "Ei BMO, que horas são?"
+```
 
-O projeto mantém suporte a `whisper.cpp` como fallback. Ele **não** é obrigatório e o binário pode estar ausente. Para ativá-lo, compile e coloque:
+O guia completo está em [ASR_QWEN3.md](ASR_QWEN3.md).
+
+### Fallback opcional
+
+O fallback fica desligado por padrão. Para ativar o Faster-Whisper:
+
+```json
+"fallback": { "enabled": true, "engine": "faster_whisper", "model": "small" }
+```
+
+Para usar `whisper.cpp`, compile e coloque:
 
 ```text
 tools/whisper.cpp/build/bin/whisper-cli
 tools/whisper-models/ggml-base.bin
 ```
 
-E ajuste `stt.fallback` em `backend/config.json`. Sem esses arquivos, o backend continua usando Faster-Whisper.
+E ajuste `stt.fallback` com `"enabled": true, "engine": "whisper_cpp"`. Sem esses
+arquivos, o fallback é ignorado com aviso no log; o Qwen3-ASR continua sendo o
+principal.
 
 ## 6. Piper e voz pt-BR
 

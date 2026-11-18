@@ -14,6 +14,7 @@ Nada aqui executa código. A validação de argumentos e a execução continuam 
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from dataclasses import dataclass
@@ -23,6 +24,14 @@ _FENCE_RE = re.compile(r"```[a-zA-Z0-9_-]*\s*(.*?)```", re.DOTALL)
 # Campos que indicam que um objeto JSON pretende ser uma chamada de ferramenta.
 _NAME_KEYS = ("tool_name", "name", "tool", "function_name")
 _ARGS_KEYS = ("arguments", "parameters", "args", "input", "params")
+# Modelos pequenos às vezes embrulham a chamada em tags de chat.
+_TAGGED_CALL_RE = re.compile(
+    r"<(?:tool_call|function_call|function)\b[^>]*>\s*"
+    r"([A-Za-z_][\w.-]*)\s*"
+    r"(\{.*?\})"
+    r"\s*</(?:tool_call|function_call|function)>",
+    re.DOTALL | re.IGNORECASE,
+)
 
 
 @dataclass
@@ -64,14 +73,46 @@ def _object_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
-def _parse_object(raw: str) -> Any:
-    try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
+def _repair_json(raw: str) -> Any:
+    """Tenta recuperar JSON levemente inválido produzido por modelos locais.
+
+    Cobre aspas simples, vírgula final, ``True``/``False``/``None`` e objetos
+    escritos como dicionário Python. Nada é executado: só literais são aceitos.
+    """
+    text = raw.strip()
+    if not text:
         return None
+    attempts = [text]
+    # Vírgulas antes de } ou ] são comuns em respostas geradas por LLM.
+    attempts.append(re.sub(r",\s*([}\]])", r"\1", text))
+    for candidate in list(attempts):
+        attempts.append(
+            candidate.replace("True", "true").replace("False", "false").replace("None", "null")
+        )
+    for candidate in attempts:
+        try:
+            return json.loads(candidate)
+        except (json.JSONDecodeError, ValueError):
+            pass
+    for candidate in attempts:
+        try:
+            value = ast.literal_eval(candidate)
+        except (ValueError, SyntaxError, TypeError):
+            continue
+        if isinstance(value, (dict, list, str, int, float, bool)) or value is None:
+            return value
+    return None
 
 
-def _arguments(value: Any) -> dict[str, Any] | None:
+def _parse_object(raw: str) -> Any:
+    parsed = _repair_json(raw)
+    if isinstance(parsed, (dict, list)):
+        return parsed
+    return None
+
+
+def parse_arguments(value: Any) -> dict[str, Any] | None:
+    """Converte argumentos em dict, aceitando JSON, aspas simples ou dict."""
     if isinstance(value, str):
         value = value.strip()
         if not value:
@@ -83,6 +124,10 @@ def _arguments(value: Any) -> dict[str, Any] | None:
     if isinstance(value, dict):
         return value
     return None
+
+
+def _arguments(value: Any) -> dict[str, Any] | None:
+    return parse_arguments(value)
 
 
 def _call_from_mapping(
@@ -144,7 +189,21 @@ def find_text_tool_calls(
     calls: list[TextToolCall] = []
     if not text or not known:
         return calls
+    covered: set[tuple[int, int]] = set()
+    # Formato <tool_call>nome{...}</tool_call>.
+    for match in _TAGGED_CALL_RE.finditer(text):
+        name = match.group(1).strip()
+        if name not in known:
+            continue
+        args = _arguments(match.group(2))
+        if args is None:
+            continue
+        span = (match.start(), match.end())
+        covered.add(span)
+        calls.append(TextToolCall(name, args, span[0], span[1]))
     for start, end in _object_spans(text):
+        if (start, end) in covered:
+            continue
         data = _parse_object(text[start:end])
         if not isinstance(data, dict):
             continue
@@ -175,15 +234,13 @@ def looks_like_tool_payload(text: str) -> bool:
         return False
     lowered = text.lower()
     markers = (
-        '"tool_calls"',
-        '"tool_call"',
-        '"function"',
-        '"arguments"',
-        '"parameters"',
+        '"tool_calls"', '"tool_call"', '"function"', '"arguments"',
+        '"parameters"', "'tool_calls'", "'tool_call'", "'function'",
+        "'arguments'", "'parameters'", "<tool_call", "<function_call",
     )
     if not any(marker in lowered for marker in markers):
         return False
-    return len(_object_spans(text)) > 0
+    return len(_object_spans(text)) > 0 or bool(_TAGGED_CALL_RE.search(text))
 
 
 def strip_tool_artifacts(text: str, known_names: Iterable[str] = ()) -> str:
@@ -214,7 +271,16 @@ def strip_tool_artifacts(text: str, known_names: Iterable[str] = ()) -> str:
         return body
 
     cleaned = _FENCE_RE.sub(_fence, cleaned)
-    cleaned = re.sub(r"</?tool_call>", " ", cleaned, flags=re.IGNORECASE)
+    # Blocos de chamada que sobraram (nome desconhecido/JSON inválido) são
+    # internos e nunca devem ser falados ao usuário.
+    cleaned = re.sub(
+        r"<(?:tool_call|function_call|function)\b[^>]*>.*?"
+        r"</(?:tool_call|function_call|function)>",
+        " ",
+        cleaned,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    cleaned = re.sub(r"</?(?:tool_call|function_call|function)\b[^>]*>", " ", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\btool_calls?\b\s*[:=]", " ", cleaned, flags=re.IGNORECASE)
     return re.sub(r"\s+", " ", cleaned).strip()
 

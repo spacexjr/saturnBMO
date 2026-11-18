@@ -251,9 +251,9 @@ else
 fi
 
 if "$VENV/bin/python" -c "import faster_whisper" >/dev/null 2>&1; then
-    ok "Faster-Whisper disponível (modelo baixado no primeiro uso)"
+    ok "Faster-Whisper disponível (fallback opcional, desligado por padrão)"
 else
-    warn "Faster-Whisper ausente; o STT pode não funcionar."
+    warn "Faster-Whisper ausente; o fallback opcional não funcionará (o Qwen3-ASR não depende dele)."
 fi
 
 if command -v gst-inspect-1.0 >/dev/null 2>&1 && gst-inspect-1.0 autoaudiosink >/dev/null 2>&1; then
@@ -265,6 +265,11 @@ fi
 if command -v ollama >/dev/null 2>&1; then
     if curl -fsS -m 3 http://127.0.0.1:11434/api/version >/dev/null 2>&1; then
         ok "Ollama respondendo em 127.0.0.1:11434"
+        if ollama list 2>/dev/null | awk '{print $1}' | grep -qx "frozenlab/qwen3-asr:0.6b"; then
+            ok "Modelo de fala frozenlab/qwen3-asr:0.6b disponível"
+        else
+            warn "Modelo de fala ausente. Rode: ollama pull frozenlab/qwen3-asr:0.6b"
+        fi
     else
         warn "Ollama instalado, mas não está respondendo. Inicie com: ollama serve"
     fi

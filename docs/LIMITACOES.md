@@ -8,7 +8,7 @@ O modo padrão é **hybrid**:
 
 ```text
 áudio -> classificador acústico ONNX (wakeword/saturnbmo.onnx)
-      -> (fallback) Faster-Whisper -> texto -> normalização -> frases
+      -> (fallback) Qwen3-ASR -> texto -> normalização -> frases
 ```
 
 - O detector acústico é independente do STT e do LLM.
@@ -23,15 +23,18 @@ O arquivo `assets/wakeword_hey_jarvis.onnx` é o modelo **“Hey Jarvis”** do 
 
 ## 2. STT
 
-- Motor principal: **Faster-Whisper** em CPU, modelo `medium`, `compute_type=int8`, idioma `pt`.
-- Modelo, dispositivo, `compute_type`, `beam_size`, `num_workers`, filtro VAD, idioma, `condition_on_previous_text` e vocabulário contextual (`stt.vocabulary`) são configuráveis em `backend/config.json`.
-- O modelo é baixado/carregado no primeiro uso e pode demorar.
-- Pode errar nomes, números, acentos e palavras parecidas.
-- Frases longas ou fala sobreposta podem ser cortadas.
+- Motor principal: **Qwen3-ASR 0.6B** local no Ollama (`frozenlab/qwen3-asr:0.6b`), idioma preferido `pt-BR`.
+- O modelo precisa estar baixado (`ollama pull`) e o Ollama rodando. Sem isso, o backend reporta `stt_unavailable` e não inventa transcrição.
+- A primeira chamada inclui o carregamento do modelo e pode demorar; chamadas seguintes usam `stt.keep_alive`.
+- O modelo é acessado pelo endpoint multimodal `/api/chat`; não existe endpoint dedicado de transcrição no Ollama.
+- Modelo, URL do Ollama, idioma, timeout e duração máxima do áudio são configuráveis em `backend/config.json` e por `BMO_ASR_*`.
+- Pode errar nomes, números, acentos, pontuação e palavras parecidas. O prefixo de idioma retornado pelo modelo é descartado.
+- Frases longas ou fala sobreposta podem ser cortadas; `stt.max_audio_s` limita o trecho enviado.
 - O VAD é por energia, não neural; em ambiente barulhento pode cortar fala ou detectar ruído.
 - O limite de fala é de 15 s por padrão (`audio.max_utterance_s`).
+- A fila de falas é curta (`audio.utterance_queue`); sob fala contínua, a fala mais antiga pode ser descartada para manter a latência.
 - Não há separação de locutores.
-- O fallback `whisper.cpp` só funciona se o binário e o modelo existirem; neste repositório o binário pode estar ausente. Faster-Whisper é o caminho principal.
+- Faster-Whisper e `whisper.cpp` são fallback opcional, desligado por padrão. O fallback só funciona se ativado e se o mecanismo estiver instalado.
 
 ## 3. LLM
 
@@ -44,7 +47,7 @@ O arquivo `assets/wakeword_hey_jarvis.onnx` é o modelo **“Hey Jarvis”** do 
 - O STT erra o nome “BMO” com frequência (por exemplo “Mopidy”, “Dumoul”), sobretudo em fala sintetizada e sem a wake word acústica. Por isso os comandos de rosto são detectados no texto, sem depender do nome.
 - Hora e data são resolvidas localmente antes do LLM.
 - Histórico é em memória, por sessão; não há persistência entre reinícios.
-- Modelos maiores podem ser lentos em CPU e consumir muita memória. `stt.cpu_threads` limita as threads do CTranslate2 (padrão 4); uma inferência em andamento bloqueia novos áudios em vez de enfileirá-los.
+- Modelos maiores podem ser lentos em CPU e consumir muita memória. O ASR e o LLM compartilham o Ollama; em máquinas pequenas, os dois modelos podem competir por RAM/CPU.
 - `think: false` reduz latência, mas não elimina erros de raciocínio.
 
 ## 4. Ferramentas e internet

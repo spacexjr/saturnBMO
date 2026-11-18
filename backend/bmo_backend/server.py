@@ -274,6 +274,14 @@ class Services:
         except Exception:  # noqa: BLE001
             llm_ok = False
         self.llm_available = llm_ok
+        refresh = getattr(self.stt, "refresh_availability", None)
+        if refresh is not None:
+            # Qwen3-ASR depende do Ollama: a sondagem confirma o modelo e evita
+            # exibir "disponível" quando o serviço local está parado.
+            try:
+                await refresh()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Sondagem do STT falhou: %s", exc)
         try:
             self.stt_available = bool(self.stt.available())
         except Exception:  # noqa: BLE001
@@ -656,7 +664,21 @@ class BmoSession:
         self.generation = 0
         self._closed = False
         self._response_task: asyncio.Task | None = None
-        self._utterance_task: asyncio.Task | None = None
+        # Uma fila curta substitui o descarte de falas quando uma transcrição
+        # ainda está em andamento. Um único worker evita capturas concorrentes.
+        queue_size = max(1, int(self.config["audio"].get("utterance_queue", 4) or 4))
+        # Cada item guarda se a fala foi capturada sob ativação manual/acústica.
+        # O direito de pular a palavra de ativação pertence à fala, não ao
+        # relógio: o Qwen3-ASR pode demorar dezenas de segundos no primeiro
+        # carregamento e a janela temporal expirava antes da transcrição.
+        self._utterance_queue: asyncio.Queue[tuple[bytes, bool]] = asyncio.Queue(
+            maxsize=queue_size
+        )
+        self._utterance_worker: asyncio.Task | None = None
+        self._current_bypass = False
+        self._playback_guard_s = max(
+            0.0, float(self.config["audio"].get("playback_guard_ms", 600) or 600) / 1000.0
+        )
         self._idle_task: asyncio.Task | None = None
         self._recovery_task: asyncio.Task | None = None
         self._ignore_audio_until = 0.0
@@ -752,7 +774,11 @@ class BmoSession:
                 "sample_rate": int(self.config["audio"]["sample_rate"]),
                 "channels": 1,
                 "frame_ms": int(self.config["audio"]["frame_ms"]),
+                "continuous_listening": bool(
+                    self.config["audio"].get("continuous_listening", True)
+                ),
             },
+            stt=self.services.stt.status(),
             wakeword=self.services.wake_status(),
             tools={
                 "enabled": self.services.tools_enabled,
@@ -795,7 +821,7 @@ class BmoSession:
         self._closed = True
         for task in (
             self._response_task,
-            self._utterance_task,
+            self._utterance_worker,
             self._idle_task,
             self._recovery_task,
         ):
@@ -869,7 +895,7 @@ class BmoSession:
                 audio_cfg["sample_rate"],
             )
             await self.event("audio.ready", **audio_cfg)
-            if self.state not in {"thinking", "speaking"}:
+            if not self._busy_with_response():
                 await self.set_state(self.resting_state(), "Microfone ativo. Diga 'Ei, BMO'.")
         elif msg_type == "audio.end":
             self.capture_active = False
@@ -877,7 +903,7 @@ class BmoSession:
             log.info("Sessão %s: microfone pausado pelo cliente.", self.session_id)
             events = self.vad.flush()
             await self._process_vad_events(events)
-            if self.state not in {"thinking", "speaking"}:
+            if not self._busy_with_response():
                 await self.set_state("idle", "Microfone pausado.")
         elif msg_type == "text":
             try:
@@ -910,11 +936,12 @@ class BmoSession:
             await self.set_state("speaking", "Reproduzindo áudio.")
         elif msg_type == "playback.done":
             self._cancel_idle_timer()
-            self._ignore_audio_until = time.monotonic() + 0.6
+            # Evita transcrever o eco do próprio TTS assim que o app termina.
+            self._ignore_audio_until = time.monotonic() + self._playback_guard_s
             self.vad.reset()
             self._reset_acoustic()
             await self.restore_face("playback_done")
-            if self.state in {"speaking", "thinking", "error"}:
+            if self.state in {"speaking", "thinking", "transcribing", "error"}:
                 await self.set_state(self.resting_state(), "Pronto para ouvir.")
             log.info("Sessão %s: reprodução concluída; voltando a aguardar.", self.session_id)
         elif msg_type == "reset":
@@ -936,7 +963,7 @@ class BmoSession:
             return
         if not self.capture_active:
             return
-        if self.state in {"thinking", "speaking"}:
+        if self._busy_with_response():
             self.vad.reset()
             return
         if time.monotonic() < self._ignore_audio_until:
@@ -962,9 +989,17 @@ class BmoSession:
         """True enquanto a janela curta pós-ativação ainda está aberta."""
         return self.bypass_wake_once and time.monotonic() < self._bypass_until
 
+    def _busy_with_response(self) -> bool:
+        """Estados em que o microfone não deve alimentar o VAD.
+
+        Inclui ``transcribing`` para não iniciar uma segunda transcrição
+        enquanto o Qwen3-ASR ainda está processando a primeira.
+        """
+        return self.state in {"transcribing", "thinking", "speaking"}
+
     async def _on_acoustic_detection(self, detection: Any) -> None:
         """Ativação pelo classificador acústico (independente do LLM/STT)."""
-        if self.state in {"thinking", "speaking"}:
+        if self._busy_with_response():
             return
         if self._bypass_active():
             return
@@ -982,11 +1017,13 @@ class BmoSession:
             score=round(float(getattr(detection, "score", 0.0)), 4),
             message="Palavra de ativação detectada.",
         )
-        await self.set_state("listening", "Pode falar, estou ouvindo.")
+        await self.set_state("wakeword_detected", "Pode falar, estou ouvindo.")
 
     async def _process_vad_events(self, events: list[Any]) -> None:
         for event in events:
             if event.kind == "speech_start":
+                if self.state == "wakeword_detected":
+                    await self.set_state("listening", "Ouvindo sua fala...")
                 await self.event("vad", speaking=True)
             elif event.kind == "speech_end":
                 # Sempre fecha o indicador de fala. Antes, um ruído curto
@@ -995,13 +1032,47 @@ class BmoSession:
                 await self.event("vad", speaking=False)
                 if not event.utterance:
                     continue
-                if self._utterance_task and not self._utterance_task.done():
-                    continue
-                self._utterance_task = asyncio.create_task(self.handle_utterance(event.utterance))
+                self._enqueue_utterance(event.utterance)
+
+    def _take_bypass(self) -> bool:
+        """Consome a ativação pendente para a próxima fala."""
+        bypass = self._bypass_active()
+        if bypass:
+            self.bypass_wake_once = False
+            self._bypass_until = 0.0
+        return bypass
+
+    def _enqueue_utterance(self, pcm: bytes) -> None:
+        """Enfileira uma fala sem bloquear o loop do WebSocket."""
+        if self._utterance_worker is None or self._utterance_worker.done():
+            self._utterance_worker = asyncio.create_task(self._utterance_loop())
+        item = (pcm, self._take_bypass())
+        try:
+            self._utterance_queue.put_nowait(item)
+        except asyncio.QueueFull:
+            # Mantém a fala mais recente; a fila é curta de propósito.
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self._utterance_queue.get_nowait()
+            self._utterance_queue.put_nowait(item)
+            log.warning("Sessão %s: fila de falas cheia; áudio antigo descartado.", self.session_id)
+
+    async def _utterance_loop(self) -> None:
+        while not self._closed:
+            pcm, bypass = await self._utterance_queue.get()
+            self._current_bypass = bypass
+            try:
+                await self.handle_utterance(pcm)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                log.exception("Sessão %s: falha ao processar fala: %s", self.session_id, exc)
+                await self._recover_after_error()
+            finally:
+                self._current_bypass = False
 
     async def handle_utterance(self, pcm: bytes) -> None:
         gen = self.generation
-        await self.set_state("thinking", "Transcrevendo a fala...")
+        await self.set_state("transcribing", "Transcrevendo a fala...")
         try:
             result = await self.services.stt.transcribe(
                 pcm, sample_rate=int(self.config["audio"]["sample_rate"])
@@ -1024,12 +1095,21 @@ class BmoSession:
         if gen != self.generation:
             return
         text = result.text.strip()
-        await self.event("transcript", text=text, final=True, source="audio",
-                         duration_ms=result.duration_ms)
+        await self.event(
+            "transcript",
+            text=text,
+            final=True,
+            source="audio",
+            duration_ms=result.duration_ms,
+            latency_ms=int(getattr(result, "latency_ms", 0) or 0),
+            engine=str(getattr(result, "engine", "") or ""),
+        )
         log.info(
-            "Sessão %s: transcrição concluída (%d ms).",
+            "Sessão %s: transcrição concluída em %d ms (áudio de %d ms, %s).",
             self.session_id,
+            int(getattr(result, "latency_ms", 0) or 0),
             int(result.duration_ms),
+            str(getattr(result, "engine", "") or "STT"),
         )
         if not text:
             await self.event("wakeword.not_detected", reason="empty",
@@ -1039,9 +1119,8 @@ class BmoSession:
 
         wake_enabled = bool(self.config["wakeword"]["enabled"])
         wake_mode = self.services.wake_mode
-        bypass = self._bypass_active()
-        if not bypass:
-            self.bypass_wake_once = False
+        # A ativação acompanha a fala capturada (ver ``_enqueue_utterance``).
+        bypass = self._current_bypass or self._take_bypass()
         transcript_required = (
             wake_enabled and wake_mode in {"transcript", "hybrid"} and not bypass
         )
@@ -1086,6 +1165,7 @@ class BmoSession:
                 phrase=match.matched_phrase,
                 transcript=text,
             )
+            await self.set_state("wakeword_detected", "Palavra de ativação reconhecida.")
             if not match.remaining_text:
                 self.bypass_wake_once = True
                 self._bypass_until = time.monotonic() + 8.0
@@ -1392,11 +1472,14 @@ class BmoSession:
 
     async def interrupt(self, reason: str) -> None:
         self.generation += 1
-        for task in (self._response_task, self._utterance_task):
+        for task in (self._response_task, self._utterance_worker):
             if task and not task.done():
                 task.cancel()
         self._response_task = None
-        self._utterance_task = None
+        self._utterance_worker = None
+        while not self._utterance_queue.empty():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self._utterance_queue.get_nowait()
         self._cancel_idle_timer()
         self.vad.reset()
         self._reset_acoustic()

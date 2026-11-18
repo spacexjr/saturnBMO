@@ -21,6 +21,7 @@ from .llm import LlmError, LlmUnavailable, sanitize_reply
 from .toolcalls import (
     find_text_tool_calls,
     looks_like_tool_payload,
+    parse_arguments,
     remove_spans,
 )
 from .toolkit import PendingConfirmation, ToolRegistry, result_text
@@ -403,14 +404,16 @@ class ToolAgent:
             name = str(function.get("name") or "").strip()
             if not name:
                 continue
-            arguments = function.get("arguments") or {}
-            if isinstance(arguments, str):
-                try:
-                    arguments = json.loads(arguments)
-                except json.JSONDecodeError:
-                    arguments = {}
-            if not isinstance(arguments, dict):
-                arguments = {}
+            raw_arguments = function.get("arguments")
+            if raw_arguments is None:
+                raw_arguments = function.get("parameters", {})
+            parsed_arguments = parse_arguments(raw_arguments)
+            if parsed_arguments is None:
+                log.warning(
+                    "Argumentos inválidos em tool_call de %s: %r", name, raw_arguments
+                )
+                parsed_arguments = {}
+            arguments = parsed_arguments
             calls.append({"function": {"name": name, "arguments": arguments}})
         return calls
 

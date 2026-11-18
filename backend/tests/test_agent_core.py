@@ -226,6 +226,87 @@ def test_registry_confirmation_runs_only_after_approval():
     assert calls == ["x.txt"]
 
 
+def test_single_quoted_tool_json_is_recovered(monkeypatch):
+    agent, registry = make_agent(
+        monkeypatch,
+        [
+            {
+                "message": {
+                    "content": (
+                        "{'name': 'launch_app', 'arguments': {'name': 'Firefox'}}"
+                    )
+                }
+            },
+            {"message": {"content": "Abri o Firefox."}},
+        ],
+    )
+    result = run(agent.run("Abre o Firefox", Emitter()))
+    assert registry.executed == [("launch_app", {"name": "Firefox"})]
+    assert result.text == "Abri o Firefox."
+    assert "arguments" not in result.text
+
+
+def test_tagged_tool_call_with_function_name_outside_json(monkeypatch):
+    agent, registry = make_agent(
+        monkeypatch,
+        [
+            {
+                "message": {
+                    "content": '<tool_call>web_search{"query": "notícias de hoje"}</tool_call>'
+                }
+            },
+            {"message": {"content": "Encontrei as notícias."}},
+        ],
+    )
+    result = run(agent.run("Pesquise notícias", Emitter()))
+    assert registry.executed == [("web_search", {"query": "notícias de hoje"})]
+    assert result.text == "Encontrei as notícias."
+
+
+def test_structured_call_with_single_quoted_string_arguments(monkeypatch):
+    agent, registry = make_agent(
+        monkeypatch,
+        [
+            {
+                "message": {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "launch_app",
+                                "arguments": "{'name': 'Firefox'}",
+                            }
+                        }
+                    ],
+                }
+            },
+            {"message": {"content": "Pronto."}},
+        ],
+    )
+    run(agent.run("Abre o Firefox", Emitter()))
+    assert registry.executed == [("launch_app", {"name": "Firefox"})]
+
+
+def test_invalid_tagged_block_is_never_shown(monkeypatch):
+    agent, registry = make_agent(
+        monkeypatch,
+        [
+            {
+                "message": {
+                    "content": (
+                        "Não posso fazer isso. "
+                        "<tool_call>{'name': 'rm_rf', 'arguments': {'path': '/'}}</tool_call>"
+                    )
+                }
+            },
+        ],
+    )
+    result = run(agent.run("Apague tudo", Emitter()))
+    assert registry.executed == []
+    assert "tool_call" not in result.text
+    assert result.text.startswith("Não posso fazer isso.")
+
+
 def test_tool_json_extraction_and_artifact_strip():
     text = (
         "Vou abrir.\n```json\n"
