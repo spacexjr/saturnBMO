@@ -194,6 +194,24 @@ Por isso a ativação manual é gravada **junto com a fala capturada**, não ape
 como uma janela de tempo: mesmo que o ASR demore mais que a janela, a pergunta
 já capturada continua válida e não é descartada.
 
+### Execução somente em CPU
+
+O ASR não exige GPU. Sem GPU disponível, o Ollama usa CPU automaticamente;
+para forçar e confirmar, envie `options: {"num_gpu": 0}` na requisição
+`/api/chat`. Teste real com um WAV de 1755 ms e o modelo forçado em CPU:
+
+```text
+chamada 1 (carregando): 1452 ms
+chamada 2 (aquecida):    238 ms
+ollama ps: 100% CPU, 1.9 GB, contexto 4096
+Transcrição: 'Ebimol, que hora sao agora'
+```
+
+Em CPU pura a latência é maior que na GPU (238 ms contra ~90 ms aquecidos),
+mas continua utilizável para frases curtas. O modelo ocupa cerca de 2 GB de
+RAM. Se a latência em CPU for alta, aumente `stt.timeout_s` ou avalie o
+fallback Faster-Whisper `small`/`int8`.
+
 ## Diagnóstico
 
 | Sintoma | Verificação |

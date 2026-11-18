@@ -59,6 +59,21 @@ Motor: qwen3-asr
 Transcrição: 'E bom, que horas são agora'
 ```
 
+### Teste real do Qwen3-ASR forçado em CPU
+
+Requisição direta a `/api/chat` com `options: {"num_gpu": 0}`, WAV PCM 16 kHz
+de 1755 ms gerado pelo Piper local:
+
+```text
+chamada 1 (carregando): 1452 ms
+chamada 2 (aquecida):    238 ms
+ollama ps: 100% CPU, 1.9 GB, contexto 4096
+Transcrição: 'Ebimol, que hora sao agora'
+```
+
+O modelo funciona sem GPU; a latência aquecida em CPU ficou cerca de 2,6 vezes
+maior que a medição aquecida na GPU (~90 ms), ainda adequada para frases curtas.
+
 ### Teste real de ponta a ponta — dois turnos no mesmo WebSocket
 
 Backend real em `127.0.0.1:8765`, Ollama real, Qwen3-ASR real, TTS Piper e LLM

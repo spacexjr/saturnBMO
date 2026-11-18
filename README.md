@@ -385,6 +385,11 @@ Na medição real deste repositório, o modelo aquecido transcreveu 1,75 s de
 áudio em cerca de 90 ms, com a primeira chamada levando cerca de 1,9 s por
 incluir o carregamento do modelo.
 
+O ASR também funciona **somente em CPU**: sem GPU, o Ollama usa CPU
+automaticamente. Forçando `options: {"num_gpu": 0}`, a mesma fala de 1,75 s
+levou 1452 ms no carregamento e 238 ms aquecida, com o processo em `100% CPU`.
+Em CPU pura a latência é maior, mas continua utilizável para frases curtas.
+
 ## Build
 
 ### APK de depuração
