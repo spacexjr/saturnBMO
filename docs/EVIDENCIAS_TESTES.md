@@ -74,6 +74,31 @@ Transcrição: 'Ebimol, que hora sao agora'
 O modelo funciona sem GPU; a latência aquecida em CPU ficou cerca de 2,6 vezes
 maior que a medição aquecida na GPU (~90 ms), ainda adequada para frases curtas.
 
+### Teste real do Qwen3-ASR na GPU disponível
+
+Hardware deste PC: Ryzen 5 5600G + **Radeon RX 7600 8 GB** (GPU discreta).
+A iGPU Vega do Ryzen **não é exposta** ao sistema (`lspci`/`ollama ps` mostram
+apenas a RX 7600), então não foi possível testá-la sem habilitá-la na BIOS.
+
+Requisição direta com `options: {"num_gpu": 999}`, WAV PCM 16 kHz de 1755 ms:
+
+```text
+chamada 1 (carregando): 2259 ms
+chamada 2 (aquecida):     89 ms
+ollama ps: 100% GPU, 1.7 GB, contexto 4096
+Transcrição: 'Ebmo, que hora sao agora'
+```
+
+Comparação com CPU pura (`num_gpu: 0`) para o mesmo áudio:
+
+| Modo | 1ª chamada | Aquecida |
+|---|---:|---:|
+| CPU | 1452 ms | 238 ms |
+| GPU RX 7600 | 2259 ms | 89 ms |
+
+A GPU demora mais no primeiro carregamento, mas é cerca de 2,7× mais rápida
+com o modelo residente.
+
 ### Teste real de ponta a ponta — dois turnos no mesmo WebSocket
 
 Backend real em `127.0.0.1:8765`, Ollama real, Qwen3-ASR real, TTS Piper e LLM

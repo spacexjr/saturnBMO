@@ -212,6 +212,12 @@ mas continua utilizável para frases curtas. O modelo ocupa cerca de 2 GB de
 RAM. Se a latência em CPU for alta, aumente `stt.timeout_s` ou avalie o
 fallback Faster-Whisper `small`/`int8`.
 
+No PC de teste, a GPU disponível é uma **Radeon RX 7600 8 GB** (discreta).
+Forçando `options: {"num_gpu": 999}`, o Ollama reportou `100% GPU` e o mesmo
+áudio levou 2259 ms no carregamento e 89 ms aquecido. A iGPU Vega do Ryzen 5
+5600G não é exposta ao sistema; para usá-la seria preciso habilitá-la na BIOS
+e confirmar que o backend de GPU do Ollama a reconhece.
+
 ## Diagnóstico
 
 | Sintoma | Verificação |
@@ -221,6 +227,7 @@ fallback Faster-Whisper `small`/`int8`.
 | Transcrição vazia | Verifique volume do microfone, ruído e `stt.max_audio_s`. |
 | Muito lento | Confirme `keep_alive` e se o modelo já está carregado (`ollama ps`). |
 | Primeiro turno após uma resposta demora dezenas de segundos | LLM e ASR podem estar se revezando na GPU; veja `ollama ps` e considere manter o ASR residente ou usar fallback/CPU. |
+| iGPU não aparece em `ollama ps`/`lspci` | Habilite a GPU integrada na BIOS e confirme que o Ollama a reconhece; caso contrário, use a GPU discreta ou CPU. |
 | Eco do TTS virou pergunta | Aumente `audio.playback_guard_ms` ou reduza o volume. |
 | Wake word não acorda | Ajuste `wakeword.threshold` e confira `wakeword.mode`. |
 
