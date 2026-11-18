@@ -47,8 +47,17 @@ Motor: qwen3-asr
 Transcrição: 'E bem, que horas são agora'
 ```
 
-A primeira chamada após o carregamento do modelo levou cerca de 1,9 s; as
-seguintes ficaram na faixa de 90 ms para 1,75 s de áudio neste PC.
+A primeira chamada após o carregamento do modelo levou 1966 ms; as seguintes
+ficaram na faixa de 90 a 108 ms para cerca de 1,3 a 1,75 s de áudio neste PC.
+Medição real do primeiro carregamento:
+
+```text
+Idioma: pt
+Áudio: 1901 ms
+Latência: 1966 ms
+Motor: qwen3-asr
+Transcrição: 'E bom, que horas são agora'
+```
 
 ### Teste real de ponta a ponta — dois turnos no mesmo WebSocket
 

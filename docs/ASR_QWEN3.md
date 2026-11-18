@@ -164,7 +164,7 @@ Para testar um WAV já existente:
 backend/.venv/bin/python scripts/check_asr.py --wav /tmp/pergunta.wav
 ```
 
-Resultado real registrado neste ambiente (Ollama 0.33.3, CPU):
+Resultado real registrado neste ambiente (Ollama 0.33.3):
 
 ```text
 Idioma: pt
@@ -174,8 +174,25 @@ Motor: qwen3-asr
 Transcrição: 'E bem, que horas são agora'
 ```
 
-A primeira chamada após iniciar o Ollama levou cerca de 1,9 s porque incluiu o
-carregamento do modelo.
+A primeira chamada após iniciar o Ollama levou 1966 ms porque incluiu o
+carregamento do modelo:
+
+```text
+Idioma: pt
+Áudio: 1901 ms
+Latência: 1966 ms
+Motor: qwen3-asr
+Transcrição: 'E bom, que horas são agora'
+```
+
+Quando o LLM (`qwen3:8b`) e o ASR disputam a mesma GPU, o primeiro turno após
+uma resposta pode levar dezenas de segundos para recarregar o ASR; medições
+reais ficaram entre 1,9 s e 27 s nesse cenário. O segundo turno com o modelo
+residente voltou a ~100 ms.
+
+Por isso a ativação manual é gravada **junto com a fala capturada**, não apenas
+como uma janela de tempo: mesmo que o ASR demore mais que a janela, a pergunta
+já capturada continua válida e não é descartada.
 
 ## Diagnóstico
 
@@ -185,6 +202,7 @@ carregamento do modelo.
 | `Modelo ASR não encontrado` | `ollama pull frozenlab/qwen3-asr:0.6b`. |
 | Transcrição vazia | Verifique volume do microfone, ruído e `stt.max_audio_s`. |
 | Muito lento | Confirme `keep_alive` e se o modelo já está carregado (`ollama ps`). |
+| Primeiro turno após uma resposta demora dezenas de segundos | LLM e ASR podem estar se revezando na GPU; veja `ollama ps` e considere manter o ASR residente ou usar fallback/CPU. |
 | Eco do TTS virou pergunta | Aumente `audio.playback_guard_ms` ou reduza o volume. |
 | Wake word não acorda | Ajuste `wakeword.threshold` e confira `wakeword.mode`. |
 
