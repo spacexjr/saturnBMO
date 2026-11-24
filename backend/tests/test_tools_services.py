@@ -88,13 +88,23 @@ def test_system_info_memory_and_disk():
     assert disk["total_gb"] > 0
 
 
-def test_build_stt_faster_whisper_with_fallback():
+def test_build_stt_defaults_to_qwen_asr_without_fallback():
     cfg = copy.deepcopy(DEFAULT_CONFIG["stt"])
     resolve_runtime_paths({"stt": cfg, "tts": {}, "wakeword": {}, "paths": {}, "tools": {}})
     stt = build_stt(cfg)
+    assert stt.__class__.__name__ == "QwenAsrStt"
+    assert stt.model == "frozenlab/qwen3-asr:0.6b"
+
+
+def test_build_stt_faster_whisper_with_explicit_fallback():
+    cfg = copy.deepcopy(DEFAULT_CONFIG["stt"])
+    cfg["fallback"]["enabled"] = True
+    cfg["fallback"]["engine"] = "faster_whisper"
+    resolve_runtime_paths({"stt": cfg, "tts": {}, "wakeword": {}, "paths": {}, "tools": {}})
+    stt = build_stt(cfg)
     assert isinstance(stt, FallbackStt)
-    assert stt.primary.__class__.__name__ == "FasterWhisperStt"
-    assert stt.fallback is not None and isinstance(stt.fallback, WhisperCppStt)
+    assert stt.primary.__class__.__name__ == "QwenAsrStt"
+    assert stt.fallback.__class__.__name__ == "FasterWhisperStt"
 
 
 def test_build_stt_whisper_cpp_only():
@@ -112,7 +122,7 @@ def test_resolve_runtime_paths_keeps_stt_model_name():
     cfg = copy.deepcopy(DEFAULT_CONFIG)
     cfg["paths"]["log_file"] = "data/x.log"
     resolve_runtime_paths(cfg)
-    # Nome do modelo do Faster-Whisper não deve virar caminho absoluto.
-    assert cfg["stt"]["model"] == "small"
+    # Nome do modelo do Qwen3-ASR não deve virar caminho absoluto.
+    assert cfg["stt"]["model"] == "frozenlab/qwen3-asr:0.6b"
     assert Path(cfg["wakeword"]["acoustic_model"]).name == "saturnbmo.onnx"
     assert Path(cfg["tools"]["access_file"]).name == "access.json"

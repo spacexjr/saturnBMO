@@ -76,7 +76,7 @@ O backend pode manter logs de eventos e erros. O app mantém até 300 entradas d
 - Não há biblioteca de câmera.
 - O app não faz upload para nuvem.
 - O backend conversa com o Ollama em `127.0.0.1:11434`; não envia áudio para APIs externas.
-- Whisper.cpp, Piper e espeak-ng rodam localmente.
+- Qwen3-ASR (via Ollama), Piper e espeak-ng rodam localmente. Nenhum áudio é enviado a serviços externos.
 - A consulta de clima acessa `api.open-meteo.com` (previsão) e, para descobrir o nome da cidade, `api.bigdatacloud.net` (geocodificação reversa). Apenas as coordenadas do GPS do celular — ou cidade/coordenadas configuradas manualmente — são enviadas; o texto da conversa e o áudio ficam no PC. Se a geocodificação reversa falhar, a previsão continua e a resposta usa “sua localização”.
 - O app pede permissão de localização (`ACCESS_FINE_LOCATION` e `ACCESS_COARSE_LOCATION`) para o clima. As coordenadas são enviadas apenas pela rede local ao backend e não são gravadas em histórico.
 

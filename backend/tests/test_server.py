@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import json
 import math
@@ -11,7 +12,7 @@ from fastapi.testclient import TestClient
 from bmo_backend.agent import AgentResult
 from bmo_backend.audio import pcm16_to_wav, split_wav
 from bmo_backend.config import DEFAULT_CONFIG, resolve_runtime_paths
-from bmo_backend.server import Services, _is_noise_transcript, create_app
+from bmo_backend.server import BmoSession, Services, _is_noise_transcript, create_app
 from bmo_backend.stt import SttResult
 from bmo_backend.toolkit import PendingConfirmation, ToolResult
 from bmo_backend.tts import TtsAudio
@@ -753,3 +754,135 @@ def test_websocket_cancel_confirmation_sends_no_execution(tmp_path):
                 if event["type"] == "confirmation.result":
                     break
             assert registry.confirmed == []
+
+
+# ---------------------------------------------------------------------------
+# Escuta contínua: fila de falas e retorno ao repouso
+# ---------------------------------------------------------------------------
+
+
+class QueueProbeSession(BmoSession):
+    def __init__(self, websocket, services):
+        super().__init__(websocket, services)
+        self.processed: list[bytes] = []
+
+    async def handle_utterance(self, pcm: bytes) -> None:
+        self.processed.append(pcm)
+
+
+def test_multiple_utterances_are_queued_and_processed(tmp_path):
+    services = Services(
+        make_config(tmp_path),
+        stt=FakeStt(),
+        tts=FakeTts(),
+        weather=FakeWeather(),
+        brain_factory=lambda: FakeBrain(),
+    )
+
+    async def scenario():
+        session = QueueProbeSession(object(), services)
+        session._enqueue_utterance(b"primeira")
+        session._enqueue_utterance(b"segunda")
+        for _ in range(100):
+            if len(session.processed) >= 2:
+                break
+            await asyncio.sleep(0.01)
+        session._closed = True
+        if session._utterance_worker is not None:
+            session._utterance_worker.cancel()
+            try:
+                await session._utterance_worker
+            except asyncio.CancelledError:
+                pass
+        return session.processed
+
+    processed = asyncio.run(scenario())
+    # Nenhuma fala pode ser descartada quando as duas chegam quase juntas.
+    assert processed == [b"primeira", b"segunda"]
+
+
+def test_manual_activation_survives_slow_transcription(tmp_path):
+    """A ativação pertence à fala capturada, não à janela de tempo.
+
+    O primeiro carregamento do Qwen3-ASR pode levar dezenas de segundos; se a
+    janela de ativação expirar nesse intervalo, a pergunta seria descartada.
+    """
+
+    services = Services(
+        make_config(tmp_path),
+        stt=FakeStt(),
+        tts=FakeTts(),
+        weather=FakeWeather(),
+        brain_factory=lambda: FakeBrain(),
+    )
+
+    class BypassProbeSession(BmoSession):
+        def __init__(self, websocket, services):
+            super().__init__(websocket, services)
+            self.observed: list[tuple[bytes, bool]] = []
+
+        async def handle_utterance(self, pcm: bytes) -> None:
+            self.observed.append((pcm, self._current_bypass))
+
+    async def scenario():
+        session = BypassProbeSession(object(), services)
+        session.bypass_wake_once = True
+        session._bypass_until = time.monotonic() + 15.0
+        session._enqueue_utterance(b"pergunta ativada")
+        # Simula a transcrição lenta: a janela temporal expira antes do worker.
+        session._bypass_until = 0.0
+        for _ in range(100):
+            if session.observed:
+                break
+            await asyncio.sleep(0.01)
+        session._closed = True
+        if session._utterance_worker is not None:
+            session._utterance_worker.cancel()
+            try:
+                await session._utterance_worker
+            except asyncio.CancelledError:
+                pass
+        return session.observed
+
+    assert asyncio.run(scenario()) == [(b"pergunta ativada", True)]
+
+
+def test_utterance_queue_discards_oldest_when_full(tmp_path):
+    cfg = make_config(tmp_path)
+    cfg["audio"]["utterance_queue"] = 1
+    services = Services(
+        cfg,
+        stt=FakeStt(),
+        tts=FakeTts(),
+        weather=FakeWeather(),
+        brain_factory=lambda: FakeBrain(),
+    )
+
+    async def scenario():
+        class SlowSession(QueueProbeSession):
+            async def handle_utterance(self, pcm: bytes) -> None:
+                await asyncio.sleep(0.05)
+                self.processed.append(pcm)
+
+        session = SlowSession(object(), services)
+        session._enqueue_utterance(b"antiga")
+        await asyncio.sleep(0.01)
+        session._enqueue_utterance(b"nova")
+        session._enqueue_utterance(b"mais nova")
+        for _ in range(100):
+            if len(session.processed) >= 2:
+                break
+            await asyncio.sleep(0.01)
+        session._closed = True
+        if session._utterance_worker is not None:
+            session._utterance_worker.cancel()
+            try:
+                await session._utterance_worker
+            except asyncio.CancelledError:
+                pass
+        return session.processed
+
+    processed = asyncio.run(scenario())
+    assert b"antiga" in processed
+    assert b"mais nova" in processed
+    assert b"nova" not in processed

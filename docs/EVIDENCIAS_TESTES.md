@@ -1,6 +1,161 @@
 # Evidências de teste
 
-Registro do que foi realmente executado. As seções históricas abaixo são de **2026-10-28**; a atualização de **2026-11-08** cobre Faster-Whisper e ferramentas; a de **2026-11-10** cobre a integração musical; a de **2026-11-11** cobre execução real de ferramentas, recuperação de chamadas e o pipeline de voz; a de **2026-11-14** cobre escuta contínua, `change_face`, sono, microfone automático e equalizador.
+Registro do que foi realmente executado. As seções históricas abaixo são de **2026-10-28**; a atualização de **2026-11-08** cobre Faster-Whisper e ferramentas; a de **2026-11-10** cobre a integração musical; a de **2026-11-11** cobre execução real de ferramentas, recuperação de chamadas e o pipeline de voz; a de **2026-11-14** cobre escuta contínua, `change_face`, sono, microfone automático e equalizador; a de **2026-11-18** cobre a troca do STT para Qwen3-ASR no Ollama.
+
+## Atualização 2026-11-18 — Qwen3-ASR no Ollama e escuta contínua
+
+### Testes automatizados executados
+
+```text
+backend: 158 passed in 4.76s
+android: 39 passed em testDebugUnitTest (JDK 21, BUILD SUCCESSFUL)
+```
+
+Comandos reais:
+
+```bash
+cd backend && .venv/bin/python -m pytest -q
+cd android-app && JAVA_HOME=/home/renatto/.local/jdks/jdk-21.0.12.1+1 \
+  ./gradlew testDebugUnitTest --console=plain
+```
+
+### Teste real do Qwen3-ASR
+
+Modelo verificado no Ollama:
+
+```text
+frozenlab/qwen3-asr:0.6b  (Qwen3-ASR-0.6B-Q8_0.gguf, 1.0 GB)
+```
+
+O modelo foi consultado pelo endpoint real `/api/chat`, com WAV PCM 16 kHz
+mono em base64 no campo `images` e `content` vazio. Resposta real:
+
+```text
+language Portuguese<asr_text>E bem, que horas são agora
+```
+
+Execução do cliente do backend contra o Ollama real:
+
+```text
+Ollama: http://127.0.0.1:11434
+Modelo ASR: frozenlab/qwen3-asr:0.6b
+Áudio: /tmp/asr-pt16.wav (16000 Hz)
+Idioma: pt
+Áudio: 1755 ms
+Latência: 90 ms
+Motor: qwen3-asr
+Transcrição: 'E bem, que horas são agora'
+```
+
+A primeira chamada após o carregamento do modelo levou 1966 ms; as seguintes
+ficaram na faixa de 90 a 108 ms para cerca de 1,3 a 1,75 s de áudio neste PC.
+Medição real do primeiro carregamento:
+
+```text
+Idioma: pt
+Áudio: 1901 ms
+Latência: 1966 ms
+Motor: qwen3-asr
+Transcrição: 'E bom, que horas são agora'
+```
+
+### Teste real do Qwen3-ASR forçado em CPU
+
+Requisição direta a `/api/chat` com `options: {"num_gpu": 0}`, WAV PCM 16 kHz
+de 1755 ms gerado pelo Piper local:
+
+```text
+chamada 1 (carregando): 1452 ms
+chamada 2 (aquecida):    238 ms
+ollama ps: 100% CPU, 1.9 GB, contexto 4096
+Transcrição: 'Ebimol, que hora sao agora'
+```
+
+O modelo funciona sem GPU; a latência aquecida em CPU ficou cerca de 2,6 vezes
+maior que a medição aquecida na GPU (~90 ms), ainda adequada para frases curtas.
+
+### Teste real do Qwen3-ASR na GPU disponível
+
+Hardware deste PC: Ryzen 5 5600G + **Radeon RX 7600 8 GB** (GPU discreta).
+A iGPU Vega do Ryzen **não é exposta** ao sistema (`lspci`/`ollama ps` mostram
+apenas a RX 7600), então não foi possível testá-la sem habilitá-la na BIOS.
+
+Requisição direta com `options: {"num_gpu": 999}`, WAV PCM 16 kHz de 1755 ms:
+
+```text
+chamada 1 (carregando): 2259 ms
+chamada 2 (aquecida):     89 ms
+ollama ps: 100% GPU, 1.7 GB, contexto 4096
+Transcrição: 'Ebmo, que hora sao agora'
+```
+
+Comparação com CPU pura (`num_gpu: 0`) para o mesmo áudio:
+
+| Modo | 1ª chamada | Aquecida |
+|---|---:|---:|
+| CPU | 1452 ms | 238 ms |
+| GPU RX 7600 | 2259 ms | 89 ms |
+
+A GPU demora mais no primeiro carregamento, mas é cerca de 2,7× mais rápida
+com o modelo residente.
+
+### Teste real de ponta a ponta — dois turnos no mesmo WebSocket
+
+Backend real em `127.0.0.1:8765`, Ollama real, Qwen3-ASR real, TTS Piper e LLM
+`qwen3:8b`. Cada turno envia `audio.start`, `activate`, PCM 16 kHz sintetizado
+pelo próprio Piper, `audio.end` e, após a resposta, `playback.done`; o script
+espera o servidor voltar ao repouso antes do turno seguinte.
+
+```text
+turno 1: 'Ei BMO, tudo bem?'
+  transcript 'Ei, bom, tudo bem.' (qwen3-asr, 4709 ms)
+  response   'Tudo bem aqui! E você? Estou aqui para ajudar se precisar.'
+  áudio      sim
+  repouso    idle
+turno 2: 'Ei BMO, que horas são?'
+  transcript 'E bom, que horas são' (qwen3-asr, 108 ms)
+  response   'Agora são 13:56.'
+  áudio      sim
+  repouso    idle
+RESULTADO: two rounds OK
+```
+
+O primeiro turno incluiu o carregamento a frio do modelo ASR no Ollama
+(4,7 s); o segundo, com o modelo residente, levou 108 ms. Os dois turnos
+usaram a mesma conexão WebSocket e retornaram a `idle` após a reprodução.
+
+Esse teste revelou e validou uma correção: a ativação manual pertencia à
+janela de tempo de 15 s. Quando o carregamento do ASR passava desse prazo, a
+pergunta era descartada mesmo já tendo sido capturada. Agora o direito de
+pular a palavra de ativação é gravado junto com a fala na fila
+(`_enqueue_utterance` → `_utterance_loop`), independente da latência da
+transcrição. `test_manual_activation_survives_slow_transcription` cobre o
+caso.
+
+### Cobertura nova
+
+- `test_qwen_asr.py`: parsing de `language ... <asr_text>`, reamostragem/limite
+  de áudio, payload real de `/api/chat`, métricas, indisponibilidade do Ollama,
+  fallback reportando o motor real e alias `qwen3-asr`.
+- `test_multiple_utterances_are_queued_and_processed`: duas falas quase
+  simultâneas passam pela fila e nenhuma é descartada.
+- `test_utterance_queue_discards_oldest_when_full`: a fila curta mantém a fala
+  mais recente sem criar capturas concorrentes.
+- `test_manual_activation_survives_slow_transcription`: a ativação acompanha a
+  fala capturada mesmo quando a janela temporal expira durante um ASR lento.
+- `test_single_quoted_tool_json_is_recovered`,
+  `test_tagged_tool_call_with_function_name_outside_json`,
+  `test_structured_call_with_single_quoted_string_arguments` e
+  `test_invalid_tagged_block_is_never_shown`: recuperação e limpeza de chamadas
+  em formatos que modelos pequenos costumam imprimir.
+- Android: estado `transcribing`/`wakeword_detected`, exibição do motor/modelo
+  de ASR e latência no log de transcrição.
+
+### Limitação deste registro
+
+A wake word acústica continua sem validação com voz humana real; os testes de
+áudio usam fala sintetizada e o classificador ONNX. O teste do Qwen3-ASR acima
+usa um WAV real gerado por TTS local, não uma gravação de microfone.
 
 ## Atualização 2026-11-14 — escuta contínua e face pelo modelo
 

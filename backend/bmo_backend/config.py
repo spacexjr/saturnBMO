@@ -45,41 +45,31 @@ DEFAULT_CONFIG: dict[str, Any] = {
         ),
     },
     "stt": {
-        # Faster-Whisper é o mecanismo principal (roda no PC, nunca no Android).
-        "engine": "faster_whisper",
-        "model": "small",
-        "device": "cpu",
-        "compute_type": "int8",
-        "language": "pt",
-        "beam_size": 5,
-        "num_workers": 1,
-        "vad_filter": True,
-        "condition_on_previous_text": False,
-        "vocabulary": [
-            "SaturnBMO",
-            "BMO",
-            "Mopidy",
-            "Ollama",
-            "Faster-Whisper",
-            "Nobara",
-            "Fedora",
-            "Linux",
-            "KDE",
-            "Discord",
-            "Firefox",
-            "Steam",
-            "YouTube Music",
-        ],
-        "timeout_s": 180,
-        # Alternativa usada se o Faster-Whisper não estiver instalado.
+        # Qwen3-ASR local via Ollama é o mecanismo principal (roda no PC,
+        # nunca no Android). Requer: ollama pull frozenlab/qwen3-asr:0.6b
+        "engine": "qwen3_asr",
+        "model": "frozenlab/qwen3-asr:0.6b",
+        "base_url": "http://127.0.0.1:11434",
+        "language": "pt-BR",
+        "timeout_s": 60,
+        "max_audio_s": 55,
+        "keep_alive": "10m",
+        "num_predict": 256,
+        # Fallback opcional e desligado por padrão: se o Qwen falhar, o erro é
+        # mostrado ao usuário em vez de ser escondido por outro mecanismo.
         "fallback": {
-            "engine": "whisper_cpp",
-            "binary": "../tools/whisper.cpp/build/bin/whisper-cli",
-            "model": "../tools/whisper-models/ggml-base.bin",
+            "enabled": False,
+            "engine": "faster_whisper",
+            "model": "small",
+            "device": "cpu",
+            "compute_type": "int8",
             "language": "pt",
-            "threads": 4,
-            "timeout_s": 90,
-            "prompt": "Ei, BMO. Ei, BMO. Conversa em português do Brasil com o assistente BMO.",
+            "beam_size": 5,
+            "num_workers": 1,
+            "vad_filter": True,
+            "condition_on_previous_text": False,
+            "cpu_threads": 4,
+            "timeout_s": 180,
         },
     },
     "tts": {
@@ -102,6 +92,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "vad_pre_roll_ms": 300,
         "min_utterance_ms": 350,
         "max_utterance_s": 15,
+        # Escuta contínua: o microfone do app permanece ativo e o backend volta
+        # sozinho a aguardar a wake word depois de cada resposta.
+        "continuous_listening": True,
+        # Áudio ignorado logo após o playback para não transcrever o próprio TTS.
+        "playback_guard_ms": 600,
+        # Fila curta de falas curtas; evita perder uma pergunta se o VAD fechar
+        # duas falas quase juntas, sem criar capturas concorrentes.
+        "utterance_queue": 4,
     },
     "weather": {
         "enabled": True,
@@ -279,14 +277,17 @@ def load_config(config_file: str | Path | None = None) -> dict[str, Any]:
         ("llm", "base_url"): "BMO_OLLAMA_URL",
         ("llm", "model"): "BMO_LLM_MODEL",
         ("llm", "system_prompt"): "BMO_SYSTEM_PROMPT",
-        ("stt", "engine"): "BMO_STT_ENGINE",
-        ("stt", "model"): "BMO_STT_MODEL",
-        ("stt", "device"): "BMO_STT_DEVICE",
-        ("stt", "compute_type"): "BMO_STT_COMPUTE_TYPE",
-        ("stt", "beam_size"): "BMO_STT_BEAM_SIZE",
-        ("stt", "language"): "BMO_STT_LANGUAGE",
-        ("stt", "fallback", "binary"): "BMO_STT_BINARY",
-        ("stt", "fallback", "model"): "BMO_STT_FALLBACK_MODEL",
+        ("stt", "engine"): "BMO_ASR_ENGINE",
+        ("stt", "model"): "BMO_ASR_MODEL",
+        ("stt", "base_url"): "BMO_ASR_BASE_URL",
+        ("stt", "language"): "BMO_ASR_LANGUAGE",
+        ("stt", "timeout_s"): "BMO_ASR_TIMEOUT",
+        ("stt", "max_audio_s"): "BMO_ASR_MAX_AUDIO_S",
+        ("stt", "keep_alive"): "BMO_ASR_KEEP_ALIVE",
+        ("stt", "num_predict"): "BMO_ASR_NUM_PREDICT",
+        ("stt", "fallback", "enabled"): "BMO_ASR_FALLBACK",
+        ("stt", "fallback", "engine"): "BMO_ASR_FALLBACK_ENGINE",
+        ("stt", "fallback", "model"): "BMO_ASR_FALLBACK_MODEL",
         ("tts", "piper_binary"): "BMO_PIPER_BINARY",
         ("tts", "voice_model"): "BMO_TTS_VOICE",
         ("weather", "location"): "BMO_WEATHER_LOCATION",
@@ -306,22 +307,29 @@ def load_config(config_file: str | Path | None = None) -> dict[str, Any]:
         ("music", "ytmusic", "location"): "BMO_YTMUSIC_LOCATION",
         ("music", "stream", "public_base_url"): "BMO_MUSIC_STREAM_BASE_URL",
     }
+    # Nomes antigos continuam aceitos; os novos (BMO_ASR_*) têm precedência.
+    aliases = {
+        "BMO_ASR_ENGINE": "BMO_STT_ENGINE",
+        "BMO_ASR_MODEL": "BMO_STT_MODEL",
+        "BMO_ASR_LANGUAGE": "BMO_STT_LANGUAGE",
+        "BMO_ASR_FALLBACK_MODEL": "BMO_STT_FALLBACK_MODEL",
+    }
     for path, env_name in env_map.items():
-        value = os.environ.get(env_name)
+        value = os.environ.get(env_name) or os.environ.get(aliases.get(env_name, ""), "")
         if not value:
             continue
         *parents, key = path
-        if key in {"port", "beam_size"}:
+        if key in {"port", "beam_size", "max_audio_s", "num_predict"}:
             try:
-                value = int(value)  # type: ignore[assignment]
+                value = int(float(value))  # type: ignore[assignment]
             except ValueError as exc:
                 raise SystemExit(f"{env_name} deve ser um número") from exc
-        if key == "threshold":
+        elif key in {"threshold", "timeout_s"}:
             try:
                 value = float(value)  # type: ignore[assignment]
             except ValueError as exc:
                 raise SystemExit(f"{env_name} deve ser um número") from exc
-        if key == "enabled":
+        if key in {"enabled", "fallback"}:
             value = value.strip().lower() in {"1", "true", "sim", "yes", "on"}  # type: ignore[assignment]
         if key == "phrases":
             value = [phrase.strip() for phrase in value.split(",") if phrase.strip()]

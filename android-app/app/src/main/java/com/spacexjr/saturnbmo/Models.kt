@@ -49,6 +49,9 @@ data class ServiceStatus(
     val sttAvailable: Boolean = false,
     val ttsAvailable: Boolean = false,
     val llmModel: String = "",
+    val sttEngine: String = "",
+    val sttModel: String = "",
+    val sttLanguage: String = "",
     val wakeMode: String = "",
     val serverTime: String = "",
 )

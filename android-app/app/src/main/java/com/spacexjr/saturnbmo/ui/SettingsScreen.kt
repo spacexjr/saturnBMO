@@ -246,7 +246,14 @@ fun SettingsScreen(
                         Text("Teste concluído", style = MaterialTheme.typography.titleMedium)
                         Text("Protocolo: ${status.protocol} • Backend: ${status.version}")
                         Text("LLM: ${ok(status.llmAvailable)} • STT: ${ok(status.sttAvailable)} • TTS: ${ok(status.ttsAvailable)}")
-                        if (status.llmModel.isNotBlank()) Text("Modelo: ${status.llmModel}")
+                        if (status.llmModel.isNotBlank()) Text("LLM: ${status.llmModel}")
+                        if (status.sttEngine.isNotBlank() || status.sttModel.isNotBlank()) {
+                            Text(
+                                "ASR: ${status.sttEngine.ifBlank { "?" }} " +
+                                    status.sttModel.ifBlank { "" } +
+                                    status.sttLanguage.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
+                            )
+                        }
                     }
                 }
             }
@@ -478,7 +485,14 @@ fun SettingsScreen(
             } else {
                 Text("Protocolo ${status.protocol} • versão ${status.version}")
                 Text("LLM: ${ok(status.llmAvailable)}  •  STT: ${ok(status.sttAvailable)}  •  TTS: ${ok(status.ttsAvailable)}")
-                if (status.llmModel.isNotBlank()) Text("Modelo: ${status.llmModel}")
+                if (status.llmModel.isNotBlank()) Text("LLM: ${status.llmModel}")
+                if (status.sttEngine.isNotBlank() || status.sttModel.isNotBlank()) {
+                    Text(
+                        "ASR: ${status.sttEngine.ifBlank { "?" }} " +
+                            status.sttModel.ifBlank { "" } +
+                            status.sttLanguage.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
+                    )
+                }
                 if (status.wakeMode.isNotBlank()) Text("Ativação: ${status.wakeMode}")
             }
             if (ui.bmoState == BmoState.ERROR && ui.lastError != null) {

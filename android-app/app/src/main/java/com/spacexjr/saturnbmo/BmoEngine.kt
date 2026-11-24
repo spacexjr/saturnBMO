@@ -860,6 +860,9 @@ class BmoEngine private constructor(context: Context) {
                         sttAvailable = stt?.optBoolean("available") == true,
                         ttsAvailable = tts?.optBoolean("available") == true,
                         llmModel = llm?.optString("model").orEmpty(),
+                        sttEngine = stt?.optString("engine").orEmpty(),
+                        sttModel = stt?.optString("model").orEmpty(),
+                        sttLanguage = stt?.optString("language").orEmpty(),
                         wakeMode = json.optJSONObject("wakeword")?.optString("mode").orEmpty(),
                         serverTime = json.optString("server_time"),
                     )
@@ -876,7 +879,9 @@ class BmoEngine private constructor(context: Context) {
                 addLog(
                     if (status.llmAvailable && status.sttAvailable && status.ttsAvailable) "INFO" else "AVISO",
                     "Serviços do PC — LLM: ${sim(status.llmAvailable)}, " +
-                        "STT: ${sim(status.sttAvailable)}, TTS: ${sim(status.ttsAvailable)}."
+                        "STT: ${sim(status.sttAvailable)}" +
+                        (status.sttEngine.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: "") +
+                        ", TTS: ${sim(status.ttsAvailable)}."
                 )
             }
             result.onFailure { error ->
@@ -1325,7 +1330,14 @@ class BmoEngine private constructor(context: Context) {
                         statusDetail = if (value.isBlank()) "Não entendi." else "Fala reconhecida.",
                     )
                 }
-                addLog("STT", if (value.isBlank()) "(vazio)" else value)
+                val engine = json.optString("engine")
+                val latency = json.optLong("latency_ms", 0L)
+                val suffix = buildString {
+                    if (engine.isNotBlank()) append(" [$engine")
+                    if (latency > 0L) append(if (engine.isNotBlank()) ", " else " [").append("${latency} ms")
+                    if (engine.isNotBlank() || latency > 0L) append("]")
+                }
+                addLog("STT", (if (value.isBlank()) "(vazio)" else value) + suffix)
             }
             "assistant.text.delta" -> {
                 val id = json.optString("id", "")
@@ -1620,6 +1632,11 @@ class BmoEngine private constructor(context: Context) {
         val detail = json.optString("detail")
         val mapped = when (state) {
             "listening" -> BmoState.LISTENING
+            // A wake word foi detectada; o microfone já está captando a pergunta.
+            "wakeword_detected" -> BmoState.LISTENING
+            // O Qwen3-ASR está transcrevendo: mesmo tratamento visual do
+            // "pensando" e microfone temporariamente silenciado.
+            "transcribing" -> BmoState.THINKING
             "thinking" -> BmoState.THINKING
             "speaking" -> BmoState.SPEAKING
             "error" -> BmoState.ERROR

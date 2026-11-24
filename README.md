@@ -59,10 +59,11 @@ A comunicação acontece pela rede local usando WebSocket autenticado. O áudio 
 
 - Captura de áudio PCM 16 kHz, mono, em blocos de 20 ms.
 - VAD por energia no PC.
-- **Faster-Whisper** como mecanismo principal de transcrição, com modelo, idioma, `compute_type`, `beam_size`, VAD e vocabulário contextual configuráveis.
-- Whisper.cpp disponível como alternativa.
-- Wake word híbrida: classificador acústico ONNX `saturnbmo.onnx` com verificação por transcrição.
-- Conversa com Ollama em português do Brasil, com tool calling, validação de argumentos, timeout por ferramenta e proteção contra chamadas duplicadas.
+- **Qwen3-ASR 0.6B** como mecanismo principal de transcrição, executado localmente pelo Ollama (`frozenlab/qwen3-asr:0.6b`), com idioma pt-BR, timeout e limite de áudio configuráveis.
+- Faster-Whisper e Whisper.cpp disponíveis apenas como fallback opcional, nunca como mecanismo principal.
+- Escuta contínua: o microfone permanece ativo, cada fala é enfileirada e o BMO volta sozinho a aguardar a wake word depois de responder.
+- Wake word híbrida e independente do ASR: classificador acústico ONNX `saturnbmo.onnx` com verificação por transcrição.
+- Conversa com Ollama em português do Brasil, com tool calling, validação de argumentos, timeout por ferramenta e proteção contra chamadas duplicadas. Chamadas impressas como JSON (inclusive com aspas simples ou tags `<tool_call>`) são recuperadas e executadas, nunca mostradas ao usuário.
 - Ferramenta real `change_face(expression)`: o modelo escolhe uma das expressões existentes em `assets/faces` e o app aplica a animação em tempo real, com restauração automática ao estado normal.
 - Recuperação de chamadas que o modelo eventualmente imprime como JSON: somente ferramentas registradas e argumentos válidos podem ser executados.
 - Síntese de voz local com Piper em português do Brasil e fallback para espeak-ng.
@@ -102,7 +103,7 @@ O Android é a interface física do BMO. O computador concentra o processamento 
 | Android | PC Linux |
 |:---:|:---:|
 | Rosto animado em Jetpack Compose | FastAPI + Uvicorn |
-| Captura com AudioRecord | VAD + Faster-Whisper |
+| Captura com AudioRecord | VAD + Qwen3-ASR (Ollama) |
 | Reprodução com AudioTrack | Wake word ONNX |
 | Token protegido pelo Android Keystore | Ollama + ferramentas |
 | Serviço em primeiro plano | Piper / espeak-ng |
@@ -116,7 +117,7 @@ O Android é a interface física do BMO. O computador concentra o processamento 
 │       ANDROID            │   WebSocket bmo/1       │        PC LINUX          │
 │                          │   + token autenticado   │                          │
 │  Rosto / Jetpack Compose │ <─────────────────────> │  FastAPI / Uvicorn       │
-│  AudioRecord (PCM 16 kHz)│                         │  VAD / Faster-Whisper    │
+│  AudioRecord (PCM 16 kHz)│                         │  VAD / Qwen3-ASR         │
 │  AudioTrack              │       Áudio             │  Wake word ONNX          │
 │  Android Keystore        │                         │  Ollama + Tool Calling   │
 │  Serviço em 1º plano     │                         │  Piper / espeak-ng      │
@@ -135,7 +136,8 @@ O Android não executa o LLM nem a transcrição. O backend não permite execuç
 | Backend | Python + FastAPI |
 | Comunicação | WebSocket + protocolo `bmo/1` |
 | Descoberta local | UDP broadcast |
-| Transcrição | Faster-Whisper |
+| Transcrição | Qwen3-ASR 0.6B no Ollama |
+| Fallback de transcrição | Faster-Whisper / Whisper.cpp (opcional) |
 | Wake word | ONNX + verificação por transcrição |
 | Modelo de linguagem | Ollama |
 | Síntese de voz | Piper / espeak-ng |
@@ -149,8 +151,9 @@ O Android não executa o LLM nem a transcrição. O backend não permite execuç
 - Linux (testado no Fedora/Nobara com KDE).
 - Python 3.11 ou superior.
 - `ffmpeg`.
-- [Ollama](https://ollama.com/) com um modelo local. O padrão do repositório é `qwen3:8b`.
-- Faster-Whisper, instalado pelas dependências do backend.
+- [Ollama](https://ollama.com/) com um modelo de conversa local. O padrão do repositório é `qwen3:8b`.
+- Modelo de fala `frozenlab/qwen3-asr:0.6b` no Ollama (obrigatório para o ASR principal).
+- Faster-Whisper (opcional), instalado pelas dependências do backend e usado somente se o fallback for ativado.
 - [Piper](https://github.com/rhasspy/piper), com a voz `pt_BR-faber-medium.onnx`; espeak-ng é o fallback.
 - [Mopidy 4](https://mopidy.com/), para reprodução de música.
 - `ytmusicapi` e `yt-dlp`.
@@ -190,13 +193,22 @@ Inicie o serviço:
 ollama serve
 ```
 
-Baixe o modelo padrão:
+Baixe os modelos padrão:
 
 ```bash
 ollama pull qwen3:8b
+ollama pull frozenlab/qwen3-asr:0.6b
 ```
 
-Se o computador tiver pouca memória, escolha outro modelo compatível e altere `llm.model` em `backend/config.json`.
+Se o computador tiver pouca memória, escolha outro modelo de conversa compatível e altere `llm.model` em `backend/config.json`. O modelo de fala é separado e não deve ser trocado sem ajustar também `stt.model`.
+
+Verifique o ASR real (o script gera a fala com o Piper local e mede a latência):
+
+```bash
+backend/.venv/bin/python scripts/check_asr.py --text "Ei BMO, que horas são agora?"
+```
+
+Consulte o [guia do Qwen3-ASR](docs/ASR_QWEN3.md) para configuração e diagnóstico.
 
 ### 4. Iniciar o sistema
 
@@ -322,10 +334,11 @@ Ei, BMO, abra o navegador.
 
 O modo padrão é **híbrido**:
 
-1. O classificador acústico ONNX (`wakeword/saturnbmo.onnx`) analisa o áudio.
-2. A transcrição do Faster-Whisper funciona como verificação e fallback.
-3. Há cooldown para evitar ativações repetidas.
-4. O BMO ignora o próprio áudio enquanto está falando.
+1. O classificador acústico ONNX (`wakeword/saturnbmo.onnx`) analisa o áudio continuamente, independente do ASR.
+2. A transcrição funciona como verificação e fallback quando a confiança acústica é baixa.
+3. Há cooldown para evitar ativações repetidas; a sensibilidade é ajustada em `wakeword.threshold`.
+4. O BMO ignora o próprio áudio enquanto fala e por uma janela curta depois do playback, evitando que o TTS acione a wake word.
+5. Depois da resposta ele retorna sozinho ao estado de escuta, sem precisar tocar em **Ouvir**.
 
 Frases reconhecidas pelo fluxo incluem:
 
@@ -344,30 +357,38 @@ O arquivo principal é:
 backend/config.json
 ```
 
-As variáveis de ambiente podem sobrescrever configurações, incluindo `BMO_HOST`, `BMO_PORT`, `BMO_LLM_MODEL`, `BMO_STT_MODEL`, `BMO_STT_COMPUTE_TYPE`, `BMO_WAKEWORD_MODE`, `BMO_TOOLS_ENABLED` e `BMO_TOKEN`.
+As variáveis de ambiente podem sobrescrever configurações, incluindo `BMO_HOST`, `BMO_PORT`, `BMO_LLM_MODEL`, `BMO_ASR_MODEL`, `BMO_ASR_BASE_URL`, `BMO_ASR_LANGUAGE`, `BMO_ASR_TIMEOUT`, `BMO_ASR_MAX_AUDIO_S`, `BMO_WAKEWORD_MODE`, `BMO_WAKEWORD_THRESHOLD`, `BMO_TOOLS_ENABLED` e `BMO_TOKEN`. Os nomes antigos `BMO_STT_*` continuam aceitos como alias.
 
-Exemplo de configuração do Faster-Whisper:
+Configuração padrão do Qwen3-ASR:
 
 ```json
 {
-  "engine": "faster_whisper",
-  "model": "medium",
-  "device": "cpu",
-  "compute_type": "int8",
-  "language": "pt",
-  "beam_size": 5,
-  "cpu_threads": 4,
-  "num_workers": 1,
-  "vad_filter": true
+  "engine": "qwen3_asr",
+  "model": "frozenlab/qwen3-asr:0.6b",
+  "base_url": "http://127.0.0.1:11434",
+  "language": "pt-BR",
+  "timeout_s": 60,
+  "max_audio_s": 55,
+  "keep_alive": "10m",
+  "num_predict": 256,
+  "fallback": { "enabled": false, "engine": "faster_whisper" }
 }
 ```
 
-`cpu_threads` limita o CTranslate2 a 4 núcleos. Sem esse limite, o modelo
-`medium` podia ocupar todos os núcleos em uma única transcrição e travar o
-servidor. Áudios novos são descartados enquanto uma inferência está em
-andamento, em vez de enfileirar threads.
+O fallback fica desligado por padrão para que uma falha do Ollama seja
+mostrada de forma honesta. Para ativá-lo, use
+`"fallback": {"enabled": true, "engine": "faster_whisper", "model": "small"}`.
+O Qwen3-ASR roda no PC e usa o endpoint multimodal `/api/chat` do Ollama; o app
+Android continua enviando apenas PCM 16 kHz.
 
-O perfil `medium`/`int8` é o padrão documentado atualmente. Em uma medição registrada no projeto, a inferência levou aproximadamente 3,4 segundos para processar 1,7 segundo de áudio em CPU. Se a latência for alta, experimente o modelo `small`.
+Na medição real deste repositório, o modelo aquecido transcreveu 1,75 s de
+áudio em cerca de 90 ms, com a primeira chamada levando cerca de 1,9 s por
+incluir o carregamento do modelo.
+
+O ASR também funciona **somente em CPU**: sem GPU, o Ollama usa CPU
+automaticamente. Forçando `options: {"num_gpu": 0}`, a mesma fala de 1,75 s
+levou 1452 ms no carregamento e 238 ms aquecida, com o processo em `100% CPU`.
+Em CPU pura a latência é maior, mas continua utilizável para frases curtas.
 
 ## Build
 
@@ -423,7 +444,7 @@ JAVA_HOME=/caminho/para/jdk-17-ou-21 ./gradlew testDebugUnitTest
 
 ### Teste de ponta a ponta
 
-Com Faster-Whisper, Piper, Ollama e backend disponíveis:
+Com Qwen3-ASR, Piper, Ollama e backend disponíveis:
 
 ```bash
 cd backend
@@ -434,8 +455,8 @@ cd backend
 
 Último resultado documentado no README:
 
-- **114 testes** de backend.
-- **17 testes** unitários Android.
+- **158 testes** de backend (incluindo Qwen3-ASR simulado e fila de escuta contínua).
+- **39 testes** unitários Android.
 - JDK 21.
 
 Os testes automatizados não substituem a validação manual em um aparelho real. Consulte [Evidências de teste](docs/EVIDENCIAS_TESTES.md).
@@ -495,7 +516,7 @@ Os rostos e o arquivo legado `wakeword_hey_jarvis.onnx` são provenientes do pro
 
 O detector `wakeword/saturnbmo.onnx` foi treinado com [livekit-wakeword](https://github.com/livekit/livekit-wakeword). Os modelos auxiliares de mel e embedding acompanham o pipeline do projeto.
 
-O saturnBMO integra ferramentas e modelos de terceiros, incluindo Faster-Whisper, Whisper.cpp, Piper, Ollama, Mopidy, BitChord e livekit-wakeword. Verifique as respectivas licenças antes de redistribuir binários, modelos ou versões modificadas.
+O saturnBMO integra ferramentas e modelos de terceiros, incluindo Qwen3-ASR, Ollama, Faster-Whisper, Whisper.cpp, Piper, Mopidy, BitChord e livekit-wakeword. Verifique as respectivas licenças antes de redistribuir binários, modelos ou versões modificadas.
 
 ---
 
