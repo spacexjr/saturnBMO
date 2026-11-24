@@ -2,7 +2,7 @@
 > **Conjunto cego (holdout):** 10 clipes por pronúncia, vozes/prompts e
 > combinações de cfg/timesteps que não aparecem no treino. Nunca usado para
 > selecionar checkpoint ou threshold. Threshold de implantação: **0,95**,
-> com `min_consecutive=3` e `hop_ms=100` no backend.
+> com `min_consecutive=2` e `hop_ms=100` no backend.
 
 ## Validação (features aumentadas, 13,71 h de fala genérica + negativas do split)
 
@@ -16,8 +16,9 @@
 | 0,97 | 33,2% | 0,07 |
 
 O threshold 0,95 foi escolhido por ficar próximo da meta de 0,1 FPPH na
-validação e manter o menor TPR limpo em 60% no holdout. No backend, as 3
-janelas consecutivas reduzem ainda mais os disparos em ruído contínuo.
+validação e manter o menor TPR limpo em 60% no holdout. No backend, a avaliação
+deslizante do holdout com `min_consecutive=2` deu **68,6% de recall (96/140) e
+0 falso positivo em 140 negativas**; com 3 janelas, o recall cai para 54,3%.
 
 # Avaliação por pronúncia — holdout_8h_gen3
 

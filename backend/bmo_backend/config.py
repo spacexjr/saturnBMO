@@ -154,10 +154,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "threshold": 0.95,
         "cooldown_s": 2.5,
         "hop_ms": 100,
-        "min_consecutive": 3,
+        "min_consecutive": 2,
         "note": (
             "Modelo acústico saturnbmo.onnx (8 h, gen3) treinado com livekit-wakeword. "
-            "Threshold 0.95 + 3 janelas consecutivas reduzem falsos positivos. "
+            "Threshold 0.95 + 2 janelas consecutivas equilibram recall e falsos positivos. "
             "Em modo hybrid, a transcrição continua como fallback."
         ),
     },

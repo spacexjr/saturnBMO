@@ -8,7 +8,7 @@ ONNX. Roda **sem LLM, sem STT e sem rede**, no mesmo backend que já recebe o
 
 > **Modelo em produção:** `saturnbmo.onnx` — 8 h exatas de treino, 14
 > pronúncias, fala genérica e negativos duros. Threshold **0,95** com
-> `min_consecutive=3`. O modelo antigo de ~4 h fica preservado em
+> `min_consecutive=2`. O modelo antigo de ~4 h fica preservado em
 > `saturnbmo_4h.onnx`. Números no [AVALIACAO_8H.md](AVALIACAO_8H.md).
 
 ---
@@ -95,7 +95,7 @@ Latência medida nesta máquina (CPU, janela completa): **~18 ms** por inferênc
   "threshold": 0.95,
   "cooldown_s": 2.5,
   "hop_ms": 100,
-  "min_consecutive": 3
+  "min_consecutive": 2
 }
 ```
 
@@ -120,9 +120,9 @@ BMO_WAKEWORD_THRESHOLD=0.95
 ```
 
 Ajuste de sensibilidade: **aumentar** o threshold reduz falsos positivos e
-exige fala mais clara; **diminuir** deixa mais sensível. O `min_consecutive=3`
+exige fala mais clara; **diminuir** deixa mais sensível. O `min_consecutive=2`
 filtra disparos isolados; para resposta mais rápida (e mais falsos positivos),
-use `2` ou `1`.
+use `1`.
 
 ---
 
@@ -275,7 +275,7 @@ threshold equivalente de baixo FPPH:
 
 \* O holdout tem apenas 0,1 h de negativas; 1 falso positivo já vale 10 FPPH.
 Na validação de 13,71 h de fala genérica, o gen3 fica em **0,20 FPPH** no
-threshold 0,95. Com `min_consecutive=3`, o backend filtra disparos isolados.
+threshold 0,95. Com `min_consecutive=2`, o backend filtra disparos isolados.
 
 ---
 

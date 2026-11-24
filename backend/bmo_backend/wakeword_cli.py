@@ -78,7 +78,7 @@ def build_detector(args: argparse.Namespace) -> AcousticWakeWord:
         hop_s=args.hop_ms / 1000.0,
         min_consecutive=args.min_consecutive
         if args.min_consecutive is not None
-        else int(wakeword.get("min_consecutive", 3)),
+        else int(wakeword.get("min_consecutive", 2)),
     )
 
 

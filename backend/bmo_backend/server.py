@@ -205,7 +205,7 @@ class Services:
                 threshold=float(cfg.get("threshold", 0.95)),
                 cooldown_s=float(cfg.get("cooldown_s", 2.5)),
                 hop_s=float(cfg.get("hop_ms", 100)) / 1000.0,
-                min_consecutive=int(cfg.get("min_consecutive", 3)),
+                min_consecutive=int(cfg.get("min_consecutive", 2)),
             )
             log.info("Detector acústico carregado: %s (modo %s)", model, mode)
             return detector
