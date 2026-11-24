@@ -1,16 +1,15 @@
 # saturnBMO — detector de palavra de ativação
 
-Detector acústico local para **"Hey BMO / Hey Beemo / Bê Ême Ó / Ei, Bê Ême Ó"**
-(e também "Beemo", "bi-mo", "BMO"), treinado com o
+Detector acústico local para **"Ei, BMO", "Hey BMO", "Hey Beemo", "Ei, Beemo",
+"BMO", "Beemo", "Bimão", "Bimo", "Bê-mo" e "Bi-mo"**, treinado com o
 [livekit-wakeword](https://github.com/livekit/livekit-wakeword) e exportado para
-ONNX. Ele roda **sem LLM, sem STT e sem rede**, no mesmo backend que já recebe o
+ONNX. Roda **sem LLM, sem STT e sem rede**, no mesmo backend que já recebe o
 áudio do aplicativo Android.
 
-> **Escopo desta entrega:** modelo protótipo treinado em ~4 h, com dados
-> sintéticos (VoxCPM2). Ele funciona e está integrado, mas **não** tem a
-> qualidade de um modelo treinado com o dataset completo de negativos reais
-> (ACAV100M). As limitações e os números medidos estão na seção
-> [Resultados reais](#resultados-reais).
+> **Modelo em produção:** `saturnbmo.onnx` — 8 h exatas de treino, 14
+> pronúncias, fala genérica e negativos duros. Threshold **0,95** com
+> `min_consecutive=3`. O modelo antigo de ~4 h fica preservado em
+> `saturnbmo_4h.onnx`. Números no [AVALIACAO_8H.md](AVALIACAO_8H.md).
 
 ---
 
@@ -18,11 +17,13 @@ ONNX. Ele roda **sem LLM, sem STT e sem rede**, no mesmo backend que já recebe 
 
 ```
 saturnBMO/
-├── assets/wakeword/
-│   ├── saturnbmo.onnx            # classificador (1,16,96) -> (1,1)
+├── wakeword/
+│   ├── saturnbmo.onnx            # classificador novo (1,16,96) -> (1,1)
+│   ├── saturnbmo_4h.onnx         # modelo antigo, preservado para rollback
 │   ├── melspectrogram.onnx       # áudio 16 kHz -> mel
 │   ├── embedding_model.onnx      # mel -> embeddings (16,96)
-│   └── AVALIACAO_PER_PHRASE.md   # avaliação por pronúncia
+│   ├── AVALIACAO_8H.md           # holdout cego + validação
+│   └── AVALIACAO_PER_PHRASE.md   # avaliação do modelo antigo de 4 h
 └── backend/
     ├── bmo_backend/acoustic_wakeword.py  # pipeline ONNX completo
     ├── bmo_backend/wakeword_cli.py       # teste com microfone do PC
@@ -33,20 +34,22 @@ saturnBMO/
     └── tests/test_acoustic_wakeword.py
 ```
 
-O modelo de treino e os dados ficam em
-`/home/renatto/Documentos/livekit-wakeword` (fora deste repositório):
+O treino fica em `/home/renatto/Documentos/livekit-wakeword` (fora deste
+repositório):
 
 ```
 livekit-wakeword/
-├── configs/saturnbmo.yaml       # config completo (7.000/1.400) — não executado
-├── configs/saturnbmo_4h.yaml    # config usado nesta entrega (700/140)
-├── scripts/saturnbmo_audio_check.py
-├── scripts/evaluate_saturnbmo.py
-└── output/saturnbmo_4h/
-    ├── saturnbmo_4h.onnx
-    ├── saturnbmo_4h.pt
-    ├── evaluation/per_phrase.json|md
-    └── positive_*/ negative_*/ background_* (WAVs + features .npy)
+├── configs/saturnbmo_8h.yaml            # dataset e aliases de TTS
+├── configs/saturnbmo_8h_generic3.yaml   # treino final (gen3)
+├── scripts/saturnbmo_holdout.py         # teste cego
+├── scripts/evaluate_saturnbmo.py        # avaliação por pronúncia
+├── scripts/saturnbmo_build_generic_model.py
+├── scripts/saturnbmo_fill_gaps.py
+└── output/saturnbmo_8h_generic3/
+    ├── saturnbmo_8h_generic3.onnx
+    ├── saturnbmo_8h_generic3.pt
+    ├── dataset_manifest.json
+    └── evaluation/holdout_8h_gen3_per_phrase.{json,md}
 ```
 
 ---
@@ -68,8 +71,8 @@ PCM s16le 16 kHz mono
 Android envia), mantém a janela de 2 s, infere a cada `hop_ms` (100 ms por
 padrão) e aplica limiar + cooldown + `min_consecutive`.
 
-Latência medida nesta máquina (CPU, janela completa): **~18–19 ms** por
-inferência, ~0,9 % do tempo real da janela.
+Latência medida nesta máquina (CPU, janela completa): **~18 ms** por inferência,
+~0,9 % do tempo real da janela.
 
 ---
 
@@ -81,15 +84,18 @@ inferência, ~0,9 % do tempo real da janela.
 "wakeword": {
   "enabled": true,
   "mode": "hybrid",
-  "phrases": ["ei bmo", "ei beemo", "hey bmo", "hey beemo", "be eme o",
-              "bê ême ó", "ei be eme o", "beemo", "bi mo", "bmo"],
-  "acoustic_model": "../assets/wakeword/saturnbmo.onnx",
-  "mel_model": "../assets/wakeword/melspectrogram.onnx",
-  "embedding_model": "../assets/wakeword/embedding_model.onnx",
-  "threshold": 0.75,
-  "cooldown_s": 2.0,
+  "phrases": ["ei bmo", "hey bmo", "hey beemo", "ei beemo", "bmo", "beemo",
+              "bimao", "ei bimao", "hey bimao", "bimo", "hey bimo", "ei bimo",
+              "be mo", "bi mo", "be eme o", "bê ême ó", "ei be eme o",
+              "hey be eme o", "ei abmo", "ei mo", "ei mô", "ei bom", "e mo",
+              "e bmo", "oi bmo", "oi beemo", "bem o", "bemo", "abmo", "bi emo"],
+  "acoustic_model": "../wakeword/saturnbmo.onnx",
+  "mel_model": "../wakeword/melspectrogram.onnx",
+  "embedding_model": "../wakeword/embedding_model.onnx",
+  "threshold": 0.95,
+  "cooldown_s": 2.5,
   "hop_ms": 100,
-  "min_consecutive": 1
+  "min_consecutive": 3
 }
 ```
 
@@ -109,12 +115,14 @@ Variáveis de ambiente úteis:
 
 ```bash
 BMO_WAKEWORD="ei bmo,hey bmo,beemo,bmo"
-BMO_WAKEWORD_MODEL=../assets/wakeword/saturnbmo.onnx
-BMO_WAKEWORD_THRESHOLD=0.8
+BMO_WAKEWORD_MODEL=../wakeword/saturnbmo.onnx
+BMO_WAKEWORD_THRESHOLD=0.95
 ```
 
 Ajuste de sensibilidade: **aumentar** o threshold reduz falsos positivos e
-exige fala mais clara; **diminuir** deixa mais sensível.
+exige fala mais clara; **diminuir** deixa mais sensível. O `min_consecutive=3`
+filtra disparos isolados; para resposta mais rápida (e mais falsos positivos),
+use `2` ou `1`.
 
 ---
 
@@ -132,9 +140,7 @@ cd /home/renatto/Documentos/saturnBMO/backend
 
 ```bash
 cd /home/renatto/Documentos/saturnBMO/backend
-.venv/bin/python -m bmo_backend.wakeword_cli --list-devices
-.venv/bin/python -m bmo_backend.wakeword_cli --device "USB HIFI AUDIO"
-.venv/bin/python -m bmo_backend.wakeword_cli --device plughw:2,0 --threshold 0.8
+.venv/bin/python -m bmo_backend.wakeword_cli --device plughw:2,0 --threshold 0.95
 ```
 
 O CLI usa `arecord` (ALSA/PipeWire), sem PyAudio. Ctrl+C encerra.
@@ -143,142 +149,156 @@ O CLI usa `arecord` (ALSA/PipeWire), sem PyAudio. Ctrl+C encerra.
 
 ```bash
 cd /home/renatto/Documentos/saturnBMO/backend
-.venv/bin/python -m pytest -q          # 44 testes
+.venv/bin/python -m pytest -q          # 143 testes
 ```
 
 ---
 
-## 5. Como o modelo foi treinado
+## 5. Como o modelo final foi treinado
 
-Tudo abaixo foi executado de fato nesta máquina
-(Ryzen 5 5600G, 15 GiB RAM, Radeon RX 7600 8 GB, ROCm 7.1, PyTorch 2.10.0+rocm7.1).
+Executado nesta máquina (Ryzen 5 5600G, 15 GiB RAM, Radeon RX 7600 8 GB, ROCm
+7.1, PyTorch 2.10.0+rocm7.1).
+
+### Composição exata das 8 h
+
+| Parte | Clipes de 2 s | Horas |
+|---|---:|---:|
+| Positivos (14 pronúncias × 40 originais × 12 rodadas) | 6.720 | 3,733 |
+| Negativos duros (60 frases; 110 originais × 12 rodadas) | 1.320 | 0,733 |
+| Fala genérica (recorte do conjunto de validação) | 5.400 | 3,000 |
+| Ruído de fundo | 960 | 0,533 |
+| **Total** | **14.400** | **8,000** |
+
+O conjunto de validação original (16,7 h de fala real) foi dividido: as
+primeiras **3 h** entram como negativo genérico no treino; as **13,71 h**
+restantes continuam só na validação. O holdout de avaliação é gerado à parte,
+com outras vozes e outros prompts, e nunca é usado em treino, seleção de
+checkpoint ou escolha de threshold.
+
+As 14 pronúncias alvo são:
+
+```
+Ei, BMO | Hey BMO | Hey Beemo | Ei, Beemo | BMO | Beemo | Bimão
+Ei, Bimão | Hey, Bimão | Bimo | Hey Bimo | Ei Bimo | Bê-mo | Bi-mo
+```
+
+`BMO` e `Beemo` isolados são positivos. A síntese de `BMO` usa a grafia
+"Bê Ême Ó" para o VoxCPM pronunciar letra por letra; o rótulo e a avaliação
+continuam sendo `BMO`. Os negativos duros cobrem "Ei, Bruno", "Hey bro",
+"Ei, bom", "Ei, amor", "Hello BMO", etc., e nunca incluem `BMO`/`Beemo`
+isolados.
+
+### Pipeline reproduzível
 
 ```bash
 cd /home/renatto/Documentos/livekit-wakeword
 
-# 1. Dependências e modelo TTS (~4,7 GB) + ruídos + RIRs
-uv sync --extra train --extra eval --extra export --extra voxcpm
+# 1. Dependências, VoxCPM2, RIRs e ruídos MUSAN (sem ACAV100M)
 HF_HUB_DISABLE_XET=1 uv run livekit-wakeword setup \
-  --config configs/saturnbmo_4h.yaml --skip-acav
+  --config configs/saturnbmo_8h.yaml --skip-acav
 
-# 2. Geração (700 treino + 140 validação por classe)
-uv run livekit-wakeword generate configs/saturnbmo_4h.yaml
+# 2. Geração (560 treino + 140 validação por classe)
+uv run livekit-wakeword generate configs/saturnbmo_8h.yaml
+# Se algum clipe falhar por OOM, preencha só os buracos:
+uv run python scripts/saturnbmo_fill_gaps.py configs/saturnbmo_8h.yaml
 
-# 3. Augmentação (3 rodadas) + features
-uv run livekit-wakeword augment configs/saturnbmo_4h.yaml
+# 3. Augmentação (12 rodadas independentes) + features
+uv run livekit-wakeword augment configs/saturnbmo_8h.yaml
 
-# 4. Treino (conv-attention medium, 30k steps)
-uv run livekit-wakeword train configs/saturnbmo_4h.yaml
+# 4. Monta o dataset gen3 com 3 h de fala genérica e 0,73 h de negativos duros
+uv run python scripts/saturnbmo_build_generic_model.py \
+  --model-name saturnbmo_8h_generic3 --generic-clips 5400 --hard-originals 110
 
-# 5. Export ONNX
-uv run livekit-wakeword export configs/saturnbmo_4h.yaml
+# 5. Treino (conv-attention medium, 30k + 3k + 3k steps)
+uv run livekit-wakeword train configs/saturnbmo_8h_generic3.yaml
 
-# 6. Avaliação por pronúncia
-uv run python scripts/evaluate_saturnbmo.py configs/saturnbmo_4h.yaml --threshold 0.75
+# 6. Export ONNX
+uv run livekit-wakeword export configs/saturnbmo_8h_generic3.yaml
+
+# 7. Gera o holdout cego e avalia
+uv run python scripts/saturnbmo_holdout.py configs/saturnbmo_8h_generic.yaml
+uv run python scripts/evaluate_saturnbmo.py configs/saturnbmo_8h_generic3.yaml \
+  --model output/saturnbmo_8h_generic3/saturnbmo_8h_generic3.onnx \
+  --positive-dir output/saturnbmo_8h_generic/holdout/positive \
+  --negative-dir output/saturnbmo_8h_generic/holdout/negative \
+  --background-dir output/saturnbmo_8h_generic/holdout/background \
+  --threshold 0.95 --label holdout_8h_gen3
 ```
 
-Distribuição exata: 700 = 100 × 7 e 140 = 20 × 7. O VoxCPM cicla
-`phrases[i % 7]`, então cada pronúncia recebeu **exatamente** a mesma
-quantidade de clipes. As 7 frases são todas positivas, sem hierarquia.
-
-Negativos: 48 frases curadas em pt-BR (incluindo "Hey bro", "Hey Bruno",
-"Hello BMO", "Ei, amor") **mais** as frases adversariais geradas
-automaticamente pelo repositório, que são filtradas para nunca coincidir com um
-alvo exato. "BMO" e "Beemo" isolados **não** entram como negativos.
-
-### Ajuste importante desta execução
-
-O repositório usa as features **ACAV100M** (16 GB, ~2000 h de fala real) como
-negativos gerais. Como o alvo era 4 h, elas não foram baixadas
-(`--skip-acav`), e o próprio código avisa que o FPR sobe sem elas. Para não
-entregar um detector inutilizável, as features do conjunto de validação
-(17 h de fala real) foram reaproveitadas como negativos de treino, via:
+Depois copie o classificador final:
 
 ```bash
-ln -sf validation_set_features.npy \
-  data/features/openwakeword_features_ACAV100M_2000_hrs_16bit.npy
+cp output/saturnbmo_8h_generic3/saturnbmo_8h_generic3.onnx \
+   /home/renatto/Documentos/saturnBMO/wakeword/saturnbmo.onnx
 ```
 
-**Consequência:** as métricas oficiais do repositório nesse conjunto deixam de
-ser um teste cego e **não são reportadas como generalização**. A avaliação
-abaixo usa o `positive_test`/`negative_test` de TTS, que o treino nunca viu.
-Para o modelo definitivo, baixe o ACAV100M e use `configs/saturnbmo.yaml`
-(7.000/1.400) sem esse reaproveitamento.
+Os arquivos `melspectrogram.onnx` e `embedding_model.onnx` são os mesmos do
+livekit-wakeword (hash idêntico); não precisam ser regerados.
 
 ---
 
-## 6. Resultados reais
+## 6. Resultados
 
-Avaliação no conjunto TTS de teste (20 clipes limpos por pronúncia, nunca
-usados no treino), com `--threshold 0.75`:
+### Holdout cego (10 clipes limpos por pronúncia, threshold 0,95)
 
-| Pronúncia | Limpo | Ruído 10 dB | Ruído 5 dB | Ruído 0 dB | Baixa | Rápida | Lenta | Distante | Score médio |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| Hey BMO | 70% | 65% | 60% | 55% | 70% | 90% | 75% | 80% | 0,712 |
-| Hey Beemo | 55% | 60% | 60% | 35% | 55% | 85% | 60% | 60% | 0,677 |
-| Bê Ême Ó | 90% | 75% | 65% | 55% | 80% | 65% | 55% | 65% | 0,843 |
-| Ei, Bê Ême Ó | 65% | 50% | 45% | 50% | 65% | 60% | 70% | 55% | 0,761 |
-| Beemo | 80% | 75% | 70% | 60% | 80% | 85% | 85% | 95% | 0,864 |
-| bi-mo | 80% | 55% | 55% | 50% | 75% | 80% | 75% | 70% | 0,782 |
-| BMO | 45% | 40% | 45% | 45% | 50% | 65% | 60% | 75% | 0,658 |
+- **Recall limpo:** 68,6% (96/140)
+- **Precisão:** 99,0%
+- **F1:** 81,0%
+- **Falsos positivos:** 1 em 180 janelas de negativas/ruído (0,56%)
+- **Menor TPR limpo por pronúncia:** 60,0%
+- **Spread entre pronúncias:** 20,0%
+- **Latência CPU:** 17,8 ms por janela (RTF 0,0089)
 
-- **FPR** em negativas TTS + ruído: **5,1 %** no threshold 0,75
-  (9,7 % @ 0,5; 3,3 % @ 0,9).
-- **Latência**: 18,8 ms por janela de 2 s (RTF ~0,0094), CPU.
-- **Menor TPR limpo entre as 4 oficiais**: 55 % (@ 0,75).
-- **Spread entre as 4 oficiais**: 35 % — **desequilibrado**.
+Tabela completa em [AVALIACAO_8H.md](AVALIACAO_8H.md). As pronúncias mais
+difíceis no holdout foram "Ei, BMO", "Bê-mo" e "Bimo"; as mais fáceis foram
+"Hey Beemo", "Ei, Beemo" e "Beemo".
 
-Leitura honesta: o modelo **funciona** e reconhece todas as pronúncias, mas:
+### Validação (13,71 h de fala genérica + negativas aumentadas)
 
-1. O FPR ainda é alto para uso contínuo (há muitos negativos adversariais
-   foneticamente parecidos, tipo "bee mobile", "beeped mo").
-2. "Ei, Bê Ême Ó" e "Hey Beemo" ficaram abaixo das demais; a exigência de
-   prioridade igual **não foi atingida** com 100 exemplos por pronúncia.
-3. 20 clipes por pronúncia dão intervalos de confiança largos (±10 pontos).
-
-### Comparação de thresholds
-
-| Threshold | FPR (TTS) | Menor TPR limpo (4 oficiais) |
+| Threshold | Recall | FPPH (janela isolada) |
 |---|---:|---:|
-| 0,50 | 9,7 % | 75 % |
-| 0,65 | 7,1 % | 55 % |
-| 0,75 | 5,1 % | 55 % |
-| 0,90 | 3,3 % | 20 % |
+| 0,90 | 66,7% | 1,76 |
+| 0,92 | 62,5% | 1,01 |
+| 0,94 | 56,1% | 0,47 |
+| 0,95 | 51,2% | 0,20 |
+| 0,96 | 44,5% | 0,07 |
 
-O valor 0,75 foi escolhido como padrão por equilibrar falsos positivos e
-resposta. Ajuste em `config.json` conforme o ambiente (o microfone do PC e o do
-celular têm ruídos diferentes).
+### Comparação com o modelo de 4 h
+
+No holdout cego, o modelo novo é melhor em todas as faixas de threshold. Em
+threshold equivalente de baixo FPPH:
+
+| Modelo | Threshold | Recall limpo | FPPH no holdout |
+|---|---:|---:|---:|
+| 4 h (`saturnbmo_4h.onnx`) | 0,94 | 19,3% | 0,0 |
+| 8 h gen3 (`saturnbmo.onnx`) | 0,95 | 68,6% | 12,9* |
+
+\* O holdout tem apenas 0,1 h de negativas; 1 falso positivo já vale 10 FPPH.
+Na validação de 13,71 h de fala genérica, o gen3 fica em **0,20 FPPH** no
+threshold 0,95. Com `min_consecutive=3`, o backend filtra disparos isolados.
 
 ---
 
 ## 7. Limitações e próximos passos
 
-- **Dados 100 % sintéticos.** Não houve gravação de voz humana real. A validação
-  mede o sintetizador, não a sua voz.
-- **Sem ACAV100M.** É a maior causa do FPR. Para o modelo de produção, baixe as
-  features (~16 GB) e treine com `configs/saturnbmo.yaml`.
-- **Poucos exemplos.** 100 positivas por pronúncia é o mínimo para um protótipo.
-  O plano completo usa 1.000.
-- **Pronúncias desbalanceadas.** "Ei, Bê Ême Ó" precisa de mais dados e/ou
-  prompts específicos.
-- **Threshold e cooldown** devem ser calibrados com gravações reais do
-  dispositivo (celular no bolso, mesa, distância).
+- **Dados 100% sintéticos no holdout.** Não houve gravação de voz humana real
+  neste ciclo; a validação mede o sintetizador.
+- **Sem ACAV100M.** Para reduzir ainda mais o FPPH, baixe as features (~16 GB)
+  e treine com um dataset maior; o limite de 8 h foi respeitado nesta entrega.
+- **Poucos clipes por condição no holdout.** 10 por pronúncia dão intervalos de
+  confiança largos (±10–15 pontos).
+- **Threshold e cooldown** ainda devem ser calibrados com gravações reais do
+  dispositivo (celular no bolso, mesa, distância, ar-condicionado).
+- **Ruído em 0 dB** derruba o recall para 0–50% nas pronúncias curtas; o modo
+  híbrido usa a transcrição como fallback.
 - O modelo exportado é ONNX para CPU; não foi feita quantização INT8.
 
-Para repetir a entrega completa (sem o corte de 4 h):
+Para repetir a entrega, siga a seção 5. Para rollback do modelo antigo:
 
 ```bash
-cd /home/renatto/Documentos/livekit-wakeword
-uv run livekit-wakeword setup --config configs/saturnbmo.yaml   # baixa ACAV
-uv run livekit-wakeword generate configs/saturnbmo.yaml         # 7.000/1.400
-uv run livekit-wakeword augment  configs/saturnbmo.yaml
-uv run livekit-wakeword train    configs/saturnbmo.yaml
-uv run livekit-wakeword export   configs/saturnbmo.yaml
-uv run python scripts/evaluate_saturnbmo.py configs/saturnbmo.yaml
+cp wakeword/saturnbmo_4h.onnx wakeword/saturnbmo.onnx
+# e ajuste threshold para 0.75 / min_consecutive para 1 em backend/config.json
 ```
-
-Depois copie `output/saturnbmo/saturnbmo.onnx` para
-`saturnBMO/assets/wakeword/saturnbmo.onnx`.
 
 ---
 
@@ -288,6 +308,19 @@ Depois copie `output/saturnbmo/saturnbmo.onnx` para
 |---|---|
 | `scripts/saturnbmo_audio_check.py` | valida integridade/duração/volume dos WAVs e distribuição por pronúncia |
 | `scripts/evaluate_saturnbmo.py` | TPR/FNR/FPR/latência por pronúncia em 9 condições |
-| `bmo_backend/acoustic_wakeword.py` | detector incremental independente do LLM |
-| `bmo_backend/wakeword_cli.py` | teste de campo com microfone do PC |
-| `tests/test_acoustic_wakeword.py` | testes do detector (pulados se os ONNX faltarem) |
+| `scripts/saturnbmo_holdout.py` | gera o teste cego com vozes/prompts fora do treino |
+| `scripts/saturnbmo_fill_gaps.py` | recompõe clipes perdidos por OOM sem duplicar índices |
+| `scripts/saturnbmo_build_generic_model.py` | monta o dataset de 8 h com fala genérica + negativos duros |
+
+### Teste cego rápido
+
+```bash
+cd /home/renatto/Documentos/livekit-wakeword
+uv run python scripts/evaluate_saturnbmo.py configs/saturnbmo_8h_generic3.yaml \
+  --positive-dir output/saturnbmo_8h_generic/holdout/positive \
+  --negative-dir output/saturnbmo_8h_generic/holdout/negative \
+  --background-dir output/saturnbmo_8h_generic/holdout/background \
+  --threshold 0.95
+```
+
+O relatório sai em `output/<model_name>/evaluation/`.

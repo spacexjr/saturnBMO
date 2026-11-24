@@ -128,7 +128,7 @@ O modo padrão é híbrido: classificador acústico + transcrição. Se um dos d
 - Verifique se os modelos existem: `wakeword/saturnbmo.onnx`, `wakeword/melspectrogram.onnx` e `wakeword/embedding_model.onnx`.
 - Para testar só a transcrição, use `BMO_WAKEWORD_MODE=transcript`.
 - Para testar só o acústico, use `BMO_WAKEWORD_MODE=acoustic`.
-- O limiar fica em `wakeword.threshold` (padrão `0.75`). O modelo acústico ainda não foi validado com voz humana real; consulte [LIMITACOES.md](LIMITACOES.md).
+- O limiar fica em `wakeword.threshold` (padrão `0.95`) e o filtro em `wakeword.min_consecutive` (padrão `3`). Se não detectar, tente `0.92`/`2`; se disparar demais, suba para `0.97`/`4`. Consulte [LIMITACOES.md](LIMITACOES.md).
 
 ## O BMO responde em texto, mas não fala
 

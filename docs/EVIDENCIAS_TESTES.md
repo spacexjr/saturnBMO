@@ -416,7 +416,7 @@ O backend agora cobre também `files`, `web`, `tools_services` e `acoustic_wakew
   - Modelo `medium` baixado no primeiro uso (~146 s incluindo download).
   - Carregamento do modelo em processo novo: ~9,8 s; inferência quente de 1,7 s de áudio: **~3,4 s** em CPU.
   - Transcrição obtida: `"Olá Bumol, que horas são agora?"` (o “BMO” sintético ainda sai distorcido; a ativação usa o detector acústico, não essa transcrição).
-- Detector acústico carregado de `wakeword/`; áudio sintético “Ei BMO” ficou abaixo do limiar. **Ainda não há teste com voz humana real.**
+- Detector acústico carregado de `wakeword/`; no modelo antigo de 4 h, áudio sintético “Ei BMO” ficou abaixo do limiar 0,75. O modelo novo de 8 h (`saturnbmo.onnx`) foi validado em holdout sintético com 68,6% de recall limpo @ 0,95 e 1 falso positivo em 180 negativas/ruído. **Ainda não há teste com voz humana real.**
 - Backend reiniciado com `stt.model=medium` confirmado em `/api/v1/info` (`active_engine=faster-whisper`), após corrigir `BMO_STT_MODEL` antigo em `backend/.env`.
 - WebSocket real (texto): “retome a música” executou `music_control`, emitiu evento `music` com `status=playing` e o BitChord saiu de `paused` para `playing`.
 - WebSocket real (áudio sintético): o Faster-Whisper `medium` carregou e transcreveu, mas a voz do Piper distorceu “Ei BMO”/“retome a música”; a wake word não foi detectada nesse áudio sintético (limitação já registrada).

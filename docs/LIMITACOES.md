@@ -13,13 +13,16 @@ O modo padrão é **hybrid**:
 
 - O detector acústico é independente do STT e do LLM.
 - Há cooldown e o áudio do próprio BMO é ignorado durante a fala.
-- O modelo `wakeword/saturnbmo.onnx` foi treinado com `livekit-wakeword` e dados sintéticos.
-- **A validação com voz humana real ainda está pendente.** Áudios sintéticos gerados com Piper/espeak-ng ficaram abaixo do limiar padrão (0,75); isso não prova que o modelo falha com voz humana, mas também não prova que funciona.
+- O modelo `wakeword/saturnbmo.onnx` (8 h, 14 pronúncias) foi treinado com `livekit-wakeword`, VoxCPM2 e 3 h de fala genérica; o modelo antigo de 4 h fica em `wakeword/saturnbmo_4h.onnx`.
+- O threshold padrão é **0,95**, com `min_consecutive=3` e `hop_ms=100`; no holdout cego o menor TPR limpo foi 60% e o FPPH na validação foi 0,20/h. Detalhes em `wakeword/AVALIACAO_8H.md`.
+- **A validação com voz humana real ainda está pendente.** O holdout usa vozes sintéticas do VoxCPM2 fora do treino; isso mede generalização entre vozes, mas não substitui gravações reais de celular/notebook.
 - Frases como “Ei BMO”, “Hey BMO”, “Hey Beemo” e “Be eme ó” são aceitas pelo fallback de transcrição. O classificador acústico tem um único alvo de wake word.
 - Ruído, sotaque, distância do microfone e eco podem causar falsos negativos ou positivos.
 - Se o modelo acústico não detectar, o modo híbrido ainda tenta a transcrição; no modo `acoustic` puro não há esse fallback.
 
 O arquivo `assets/wakeword_hey_jarvis.onnx` é o modelo **“Hey Jarvis”** do projeto original e é preservado apenas como referência. Ele não é usado.
+
+O modelo de 4 h (`wakeword/saturnbmo_4h.onnx`) fica disponível para rollback; para usá-lo, ajuste `threshold` para 0,75 e `min_consecutive` para 1.
 
 ## 2. STT
 
