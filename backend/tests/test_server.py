@@ -526,7 +526,7 @@ def test_websocket_audio_vad_wakeword_and_response(tmp_path):
                 }
             )
             assert ws.receive_json()["type"] == "audio.ready"
-            pcm = tone(0.9) + silence(1.2)
+            pcm = tone(0.9) + silence(2.0)
             for offset in range(0, len(pcm), 640):
                 ws.send_bytes(pcm[offset : offset + 640])
             seen = []

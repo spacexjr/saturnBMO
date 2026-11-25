@@ -14,7 +14,7 @@ O modo padrão é **hybrid**:
 - O detector acústico é independente do STT e do LLM.
 - Há cooldown e o áudio do próprio BMO é ignorado durante a fala.
 - O modelo `wakeword/saturnbmo.onnx` (8 h, 14 pronúncias) foi treinado com `livekit-wakeword`, VoxCPM2 e 3 h de fala genérica; o modelo antigo de 4 h fica em `wakeword/saturnbmo_4h.onnx`.
-- O threshold padrão é **0,95**, com `min_consecutive=2` e `hop_ms=100`; no holdout cego o menor TPR limpo foi 60% e, no backend com 2 janelas, o recall foi 68,6% (96/140) com 0 falso positivo em 140 negativas. O FPPH na validação de 13,71 h (janela isolada) foi 0,20/h. Detalhes em `wakeword/AVALIACAO_8H.md`.
+- O threshold padrão é **0,90**, com `min_consecutive=2` e `hop_ms=100`; no holdout cego o menor TPR limpo foi 60% e, no backend com 2 janelas, o recall foi 68,6% (96/140) com 0 falso positivo em 140 negativas nesse limiar de referência (0,95). O FPPH na validação de 13,71 h (janela isolada) foi 0,20/h em 0,95. O padrão foi reduzido para 0,90 porque vozes reais de celular/notebook ficavam abaixo de 0,95 e a wake word quase nunca disparava. Detalhes em `wakeword/AVALIACAO_8H.md`.
 - **A validação com voz humana real ainda está pendente.** O holdout usa vozes sintéticas do VoxCPM2 fora do treino; isso mede generalização entre vozes, mas não substitui gravações reais de celular/notebook.
 - Frases como “Ei BMO”, “Hey BMO”, “Hey Beemo” e “Be eme ó” são aceitas pelo fallback de transcrição. O classificador acústico tem um único alvo de wake word.
 - Ruído, sotaque, distância do microfone e eco podem causar falsos negativos ou positivos.

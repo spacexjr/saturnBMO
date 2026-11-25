@@ -51,6 +51,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "model": "frozenlab/qwen3-asr:0.6b",
         "base_url": "http://127.0.0.1:11434",
         "language": "pt-BR",
+        # Força o idioma no Qwen3-ASR. Sem isto, clipes curtos/ruidosos podem
+        # ser detectados como francês, japonês etc. e transcritos errado.
+        "force_language": True,
         "timeout_s": 60,
         "max_audio_s": 55,
         "keep_alive": "10m",
@@ -88,7 +91,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "frame_ms": 20,
         "vad_min_rms": 0.012,
         "vad_start_ms": 180,
-        "vad_end_silence_ms": 700,
+        # 1,5 s tolera pausas naturais no meio da frase. Com 700 ms o VAD
+        # fechava a fala antes de o usuário terminar e o restante virava outra
+        # captura (parecia que a wake word não funcionava).
+        "vad_end_silence_ms": 1500,
         "vad_pre_roll_ms": 300,
         "min_utterance_ms": 350,
         "max_utterance_s": 15,
@@ -151,14 +157,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "acoustic_model": "../wakeword/saturnbmo.onnx",
         "mel_model": "../wakeword/melspectrogram.onnx",
         "embedding_model": "../wakeword/embedding_model.onnx",
-        "threshold": 0.95,
+        "threshold": 0.90,
         "cooldown_s": 2.5,
         "hop_ms": 100,
         "min_consecutive": 2,
         "note": (
             "Modelo acústico saturnbmo.onnx (8 h, gen3) treinado com livekit-wakeword. "
-            "Threshold 0.95 + 2 janelas consecutivas equilibram recall e falsos positivos. "
-            "Em modo hybrid, a transcrição continua como fallback."
+            "Threshold 0.90 + 2 janelas consecutivas: vozes reais ficavam abaixo de 0,95 "
+            "e a wake word quase nunca disparava. Em modo hybrid, a transcrição continua "
+            "como fallback."
         ),
     },
     "music": {
@@ -281,6 +288,7 @@ def load_config(config_file: str | Path | None = None) -> dict[str, Any]:
         ("stt", "model"): "BMO_ASR_MODEL",
         ("stt", "base_url"): "BMO_ASR_BASE_URL",
         ("stt", "language"): "BMO_ASR_LANGUAGE",
+        ("stt", "force_language"): "BMO_ASR_FORCE_LANGUAGE",
         ("stt", "timeout_s"): "BMO_ASR_TIMEOUT",
         ("stt", "max_audio_s"): "BMO_ASR_MAX_AUDIO_S",
         ("stt", "keep_alive"): "BMO_ASR_KEEP_ALIVE",
@@ -329,7 +337,7 @@ def load_config(config_file: str | Path | None = None) -> dict[str, Any]:
                 value = float(value)  # type: ignore[assignment]
             except ValueError as exc:
                 raise SystemExit(f"{env_name} deve ser um número") from exc
-        if key in {"enabled", "fallback"}:
+        if key in {"enabled", "fallback", "force_language"}:
             value = value.strip().lower() in {"1", "true", "sim", "yes", "on"}  # type: ignore[assignment]
         if key == "phrases":
             value = [phrase.strip() for phrase in value.split(",") if phrase.strip()]

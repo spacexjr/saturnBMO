@@ -963,11 +963,13 @@ class BmoSession:
             return
         if not self.capture_active:
             return
-        if self._busy_with_response():
+        if self._capture_blocked():
             self.vad.reset()
+            self._reset_acoustic()
             return
         if time.monotonic() < self._ignore_audio_until:
             self.vad.reset()
+            self._reset_acoustic()
             return
         if self.services.wake_acoustic is not None:
             loop = asyncio.get_running_loop()
@@ -990,16 +992,22 @@ class BmoSession:
         return self.bypass_wake_once and time.monotonic() < self._bypass_until
 
     def _busy_with_response(self) -> bool:
-        """Estados em que o microfone não deve alimentar o VAD.
-
-        Inclui ``transcribing`` para não iniciar uma segunda transcrição
-        enquanto o Qwen3-ASR ainda está processando a primeira.
-        """
+        """Estados em que o assistente ainda está ocupado com o turno atual."""
         return self.state in {"transcribing", "thinking", "speaking"}
+
+    def _capture_blocked(self) -> bool:
+        """Estados em que o áudio do microfone deve ser descartado.
+
+        ``transcribing`` NÃO bloqueia a captura: o Qwen3-ASR pode levar mais de
+        um segundo e, se o áudio fosse jogado fora nesse intervalo, a parte
+        final da frase virava uma nova captura sem sentido. A fila de falas
+        já serializa as transcrições.
+        """
+        return self.state in {"thinking", "speaking"}
 
     async def _on_acoustic_detection(self, detection: Any) -> None:
         """Ativação pelo classificador acústico (independente do LLM/STT)."""
-        if self._busy_with_response():
+        if self._capture_blocked():
             return
         if self._bypass_active():
             return

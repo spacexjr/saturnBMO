@@ -127,17 +127,40 @@ class WakeWordDetector:
         if _is_bmo_token(tokens[0]):
             matched = tokens[0]
             start = 1
-        elif (
-            len(tokens) >= 2
-            and tokens[0] in {"ei", "hey", "oi"}
-            and _is_bmo_token(tokens[1], after_prefix=True)
-        ):
-            matched = f"{tokens[0]} {tokens[1]}"
-            start = 2
+        else:
+            # O Qwen3-ASR costuma juntar a interjeição com o nome em uma única
+            # palavra ("Ebimol", "Eibmo", "Heibemo"). Separa o prefixo de
+            # chamada antes de testar as formas curtas de "BMO".
+            split = _split_greeting(tokens[0])
+            if split is not None:
+                matched = split
+                start = 1
+            elif (
+                len(tokens) >= 2
+                and tokens[0] in {"ei", "hey", "oi", "e"}
+                and _is_bmo_token(tokens[1], after_prefix=True)
+            ):
+                matched = f"{tokens[0]} {tokens[1]}"
+                start = 2
         if not matched:
             return None
         remaining = " ".join(tokens[start:]).strip(" ,.!?;:-")
         return WakeWordResult(True, remaining, matched, normalized)
+
+
+_GREETINGS = ("hey", "hei", "he", "ei", "oi", "hi", "e")
+
+
+def _split_greeting(token: str) -> str | None:
+    """Separa "eibmol"/"ebimol" em chamada + forma curta de BMO."""
+    token = token.strip(".,!?;:-")
+    for greeting in _GREETINGS:
+        if not token.startswith(greeting):
+            continue
+        rest = token[len(greeting) :]
+        if rest and _is_bmo_token(rest, after_prefix=True):
+            return f"{greeting} {rest}"
+    return None
 
 
 _BMO_FUZZY = re.compile(r"^(?:(?:e|i|u)?m(?:o|ol|l|m)|bo|bom)$")

@@ -29,6 +29,16 @@ def test_detects_mo_variant_from_real_transcription():
     assert "aplicativos" in result.remaining_text
 
 
+def test_fuzzy_accepts_greeting_glued_to_bmo():
+    """O Qwen3-ASR transcreve "Ei BMO" como uma palavra só (Ebimol/Eibmo)."""
+    detector = WakeWordDetector(["ei bmo", "bmo"])
+    for text in ("Ebimol, que horas são?", "Eibmo que dia é hoje", "Heibemo"):
+        result = detector.detect(text)
+        assert result.detected is True, text
+    result = detector.detect("Ebimol, que horas são?")
+    assert "que horas" in result.remaining_text
+
+
 def test_fuzzy_accepts_bumol_but_not_bom_dia():
     detector = WakeWordDetector(["ei bmo", "bmo"])
     result = detector.detect("Ei, Bumol, quais aplicativos estão instalados?")

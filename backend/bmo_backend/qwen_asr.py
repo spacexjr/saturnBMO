@@ -57,6 +57,46 @@ _LANGUAGE_CODES = {
     "korean": "ko",
 }
 
+# Nomes canônicos aceitos pelo Qwen3-ASR para forçar o idioma. O modelo é
+# treinado a responder ``language <NOME><asr_text>``; preencher esse prefixo no
+# turno do assistente evita que áudio curto/ruidoso seja detectado como francês,
+# japonês etc.
+_LANGUAGE_NAMES = {
+    "pt": "Portuguese",
+    "pt-br": "Portuguese",
+    "pt_br": "Portuguese",
+    "portuguese": "Portuguese",
+    "portugues": "Portuguese",
+    "português": "Portuguese",
+    "en": "English",
+    "english": "English",
+    "es": "Spanish",
+    "spanish": "Spanish",
+    "espanhol": "Spanish",
+    "fr": "French",
+    "french": "French",
+    "de": "German",
+    "german": "German",
+    "it": "Italian",
+    "italian": "Italian",
+    "ja": "Japanese",
+    "japanese": "Japanese",
+    "zh": "Chinese",
+    "chinese": "Chinese",
+    "ko": "Korean",
+    "korean": "Korean",
+}
+
+
+def _language_name(value: str) -> str:
+    """Converte ``pt-BR``/``Portuguese`` no nome canônico do Qwen3-ASR."""
+    key = str(value or "").strip().lower().replace("_", "-")
+    if not key or key in {"auto", "automatic", "detect"}:
+        return ""
+    if key in _LANGUAGE_NAMES:
+        return _LANGUAGE_NAMES[key]
+    return _LANGUAGE_NAMES.get(key.split("-")[0], "")
+
 
 class QwenAsrStt:
     """Transcrição local pelo Qwen3-ASR no Ollama.
@@ -75,6 +115,12 @@ class QwenAsrStt:
         self.max_audio_s = float(config.get("max_audio_s", 55) or 55)
         self.keep_alive = str(config.get("keep_alive") or "10m")
         self.num_predict = int(config.get("num_predict", 256) or 256)
+        # Forçar o idioma evita a detecção automática errar em clipes curtos
+        # (o modelo já transcreveu áudio de "BMO" como japonês/francês).
+        self.force_language = bool(config.get("force_language", True))
+        self._forced_language = (
+            _language_name(self.language) if self.force_language else ""
+        )
         self._lock = asyncio.Lock()
 
         # Otimista até a primeira sondagem: evita marcar o STT como
@@ -162,16 +208,25 @@ class QwenAsrStt:
         used_ms = int(len(pcm) / 2 / SAMPLE_RATE * 1000)
         return pcm, duration_ms, used_ms
 
-    @staticmethod
-    def _payload(model: str, wav: bytes, *, keep_alive: str, num_predict: int) -> dict[str, Any]:
+    def _payload(self, model: str, wav: bytes, *, keep_alive: str, num_predict: int) -> dict[str, Any]:
         encoded = base64.b64encode(wav).decode("ascii")
+        messages: list[dict[str, Any]] = [
+            {"role": "user", "content": "", "images": [encoded]}
+        ]
+        if self._forced_language:
+            # Prefill do turno do assistente: o modelo continua a partir de
+            # "language Portuguese<asr_text>" e não tenta detectar o idioma.
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": f"language {self._forced_language}<asr_text>",
+                }
+            )
         return {
             "model": model,
             "stream": False,
             "keep_alive": keep_alive,
-            "messages": [
-                {"role": "user", "content": "", "images": [encoded]}
-            ],
+            "messages": messages,
             "options": {
                 # O modelo é de ASR: temperatura 0 evita "criatividade".
                 "temperature": 0,

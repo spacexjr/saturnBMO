@@ -64,6 +64,7 @@ O backend descarta o prefixo de idioma, usa apenas o texto depois de
   "model": "frozenlab/qwen3-asr:0.6b",
   "base_url": "http://127.0.0.1:11434",
   "language": "pt-BR",
+  "force_language": true,
   "timeout_s": 60,
   "max_audio_s": 55,
   "keep_alive": "10m",
@@ -81,7 +82,8 @@ O backend descarta o prefixo de idioma, usa apenas o texto depois de
 | `engine` | `qwen3_asr` (aceita também `qwen3-asr`, `qwen_asr`). |
 | `model` | Nome exato do modelo no Ollama. |
 | `base_url` | Endereço local do Ollama. |
-| `language` | Idioma preferido; o modelo ainda informa o idioma detectado. |
+| `language` | Idioma preferido; com `force_language` o modelo é obrigado a transcrever nele. |
+| `force_language` | `true` (padrão) preenche `language <Nome><asr_text>` no turno do assistente. Sem isso, clipes curtos/ruidosos podem ser detectados como francês, japonês etc. |
 | `timeout_s` | Tempo máximo da requisição de transcrição. |
 | `max_audio_s` | Trecho máximo enviado; o excedente é cortado com aviso no log. |
 | `keep_alive` | Mantém o modelo carregado entre falas. |
@@ -94,6 +96,7 @@ BMO_ASR_ENGINE=qwen3_asr
 BMO_ASR_MODEL=frozenlab/qwen3-asr:0.6b
 BMO_ASR_BASE_URL=http://127.0.0.1:11434
 BMO_ASR_LANGUAGE=pt-BR
+BMO_ASR_FORCE_LANGUAGE=true
 BMO_ASR_TIMEOUT=60
 BMO_ASR_MAX_AUDIO_S=55
 BMO_ASR_KEEP_ALIVE=10m

@@ -75,6 +75,8 @@ class EnergyVad:
         pre_roll_ms: int = 300,
         min_utterance_ms: int = 350,
         max_utterance_s: float = 15.0,
+        calibration_ms: int = 250,
+        noise_window_ms: int = 2500,
     ) -> None:
         self.sample_rate = sample_rate
         self.frame_ms = frame_ms
@@ -85,6 +87,15 @@ class EnergyVad:
         self.pre_roll: deque[bytes] = deque(maxlen=max(1, math.ceil(pre_roll_ms / frame_ms)))
         self.min_utterance_bytes = int(sample_rate * min_utterance_ms / 1000) * 2
         self.max_utterance_bytes = int(sample_rate * max_utterance_s) * 2
+        # O piso de ruído é estimado pelo percentil 20 das últimas 2,5 s de
+        # energia. Diferente da média móvel antiga, ele é atualizado também
+        # durante a fala e não "trava" quando o ruído de fundo já começa acima
+        # do mínimo: sem isto, qualquer ambiente barulhento virava fala
+        # contínua, o VAD cortava trechos de ~1 s e cada trecho ia para o ASR.
+        self.calibration_frames = max(1, math.ceil(calibration_ms / frame_ms))
+        self.noise_frames = max(self.calibration_frames, math.ceil(noise_window_ms / frame_ms))
+        self._energies: deque[float] = deque(maxlen=self.noise_frames)
+        self._calibration_left = self.calibration_frames
         self.reset()
 
     def reset(self) -> None:
@@ -94,15 +105,27 @@ class EnergyVad:
         self._silence_run = 0
         self._utterance = bytearray()
         self.pre_roll.clear()
+        self._energies.clear()
+        self._calibration_left = self.calibration_frames
         self.noise_floor = 0.0
 
     @property
     def speaking(self) -> bool:
         return self._speaking
 
+    def _update_noise_floor(self) -> None:
+        if not self._energies:
+            self.noise_floor = 0.0
+            return
+        ordered = sorted(self._energies)
+        index = min(len(ordered) - 1, int(len(ordered) * 0.2))
+        self.noise_floor = ordered[index]
+
     def _threshold(self) -> float:
-        # O piso de ruído só sobe devagar e nunca ultrapassa 4x o mínimo.
-        return max(self.min_rms, min(self.noise_floor * 3.0, self.min_rms * 4.0))
+        # Exige energia acima do ruído ambiente. O teto (6x o mínimo) evita que
+        # um ambiente muito barulhento esconda a fala; o piso (min_rms) evita
+        # que o silêncio absoluto gere detecções.
+        return max(self.min_rms, min(self.noise_floor * 3.0, self.min_rms * 6.0))
 
     def feed(self, data: bytes) -> list[VadEvent]:
         if not data:
@@ -117,14 +140,19 @@ class EnergyVad:
 
     def _process_frame(self, frame: bytes) -> list[VadEvent]:
         energy = pcm16_rms(frame)
+        self._energies.append(energy)
+        self._update_noise_floor()
         threshold = self._threshold()
         is_speech = energy >= threshold
 
         if not self._speaking:
             self.pre_roll.append(frame)
+            if self._calibration_left > 0:
+                # Calibração inicial: aprende o ruído ambiente antes de aceitar
+                # que um pico isolado seja fala.
+                self._calibration_left -= 1
+                return []
             if not is_speech:
-                # Média móvel do piso de ruído.
-                self.noise_floor = (self.noise_floor * 0.95) + (energy * 0.05)
                 return []
             self._speech_run += 1
             if self._speech_run < self.start_frames:

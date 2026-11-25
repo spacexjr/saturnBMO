@@ -49,6 +49,31 @@ def test_vad_ignores_short_noise():
     assert all(e.kind != "speech_end" or e.utterance == b"" for e in events)
 
 
+def test_vad_noise_floor_adapts_to_constant_background():
+    """Ruído contínuo acima do mínimo não pode virar fala sem fim.
+
+    A média móvel antiga nunca subia, porque todo quadro acima de ``min_rms``
+    já era classificado como fala. Aqui o piso precisa acompanhar o ruído e só
+    uma fala claramente mais forte deve iniciar uma captura.
+    """
+    vad = EnergyVad(min_rms=0.01, start_ms=180, end_silence_ms=300, min_utterance_ms=200)
+    events = feed_frames(vad, tone(3.0, amplitude=0.03))
+    assert all(e.kind != "speech_start" for e in events)
+
+    events = feed_frames(vad, tone(0.8, amplitude=0.3))
+    assert any(e.kind == "speech_start" for e in events)
+
+
+def test_vad_waits_for_trailing_silence_before_ending():
+    vad = EnergyVad(min_rms=0.01, start_ms=180, end_silence_ms=1500, min_utterance_ms=200)
+    events = []
+    events.extend(feed_frames(vad, tone(0.8)))
+    events.extend(feed_frames(vad, silence(1.2)))
+    assert all(e.kind != "speech_end" for e in events)
+    events.extend(feed_frames(vad, silence(0.5)))
+    assert any(e.kind == "speech_end" for e in events)
+
+
 def test_wav_roundtrip():
     pcm = tone(0.2)
     wav = pcm16_to_wav(pcm, 16000)

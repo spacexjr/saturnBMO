@@ -57,6 +57,25 @@ def test_prepare_pcm_resamples_and_limits_duration():
     assert used_ms <= 1000
 
 
+def test_payload_forces_configured_language():
+    stt = client(language="pt-BR")
+    payload = stt._payload(
+        stt.model, b"RIFF", keep_alive="5m", num_predict=64
+    )
+    assert payload["messages"][1] == {
+        "role": "assistant",
+        "content": "language Portuguese<asr_text>",
+    }
+
+
+def test_payload_keeps_auto_detection_when_language_is_auto():
+    stt = client(language="auto")
+    payload = stt._payload(
+        stt.model, b"RIFF", keep_alive="5m", num_predict=64
+    )
+    assert [message["role"] for message in payload["messages"]] == ["user"]
+
+
 def test_transcribe_uses_ollama_chat_and_reports_metrics(monkeypatch):
     stt = client()
     calls = []

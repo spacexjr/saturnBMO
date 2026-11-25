@@ -24,6 +24,7 @@
     "model": "frozenlab/qwen3-asr:0.6b",
     "base_url": "http://127.0.0.1:11434",
     "language": "pt-BR",
+    "force_language": true,
     "timeout_s": 60,
     "max_audio_s": 55,
     "keep_alive": "10m",
@@ -59,7 +60,7 @@
     "frame_ms": 20,
     "vad_min_rms": 0.012,
     "vad_start_ms": 180,
-    "vad_end_silence_ms": 700,
+    "vad_end_silence_ms": 1500,
     "vad_pre_roll_ms": 300,
     "min_utterance_ms": 350,
     "max_utterance_s": 15,
@@ -118,11 +119,11 @@
     "acoustic_model": "../wakeword/saturnbmo.onnx",
     "mel_model": "../wakeword/melspectrogram.onnx",
     "embedding_model": "../wakeword/embedding_model.onnx",
-    "threshold": 0.95,
+    "threshold": 0.90,
     "cooldown_s": 2.5,
     "hop_ms": 100,
     "min_consecutive": 2,
-    "note": "Modelo acústico saturnbmo.onnx (8 h, gen3) treinado com livekit-wakeword. Fala genérica e negativos duros no treino; threshold 0.95 + 2 janelas consecutivas. Em modo hybrid, a transcrição é apenas fallback e exige a frase de chamada no início da fala."
+    "note": "Modelo acústico saturnbmo.onnx (8 h, gen3) treinado com livekit-wakeword. Fala genérica e negativos duros no treino; threshold 0.90 + 2 janelas consecutivas (vozes reais ficavam abaixo de 0,95). Em modo hybrid, a transcrição é apenas fallback e exige a frase de chamada no início da fala."
   },
   "music": {
     "enabled": true,
